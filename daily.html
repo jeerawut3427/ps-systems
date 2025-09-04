@@ -57,6 +57,7 @@
                         <h2 id="daily-submit-title" class="text-xl font-semibold">ส่งยอดกำลังพลประจำวัน</h2>
                         <p id="daily-submit-date" class="text-lg text-gray-500"></p>
                     </div>
+                    <div id="submission-info-area-daily" class="hidden text-center p-4 mb-4 bg-green-100 text-green-800 rounded-lg"></div>
                     <div id="admin-dept-selector-container-daily" class="mb-4"></div>
                     <div id="bulk-status-buttons-daily" class="mb-4 flex flex-wrap gap-2 border-b pb-4"></div>
 
@@ -126,20 +127,47 @@
 
                 <!-- Daily Final Report Pane -->
                 <section id="pane-daily-report" class="tab-pane hidden">
-                     <h2 class="text-xl font-semibold mb-4">ส่งรายงานประจำวัน (อยู่ระหว่างการพัฒนา)</h2>
+                     <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-semibold">ส่งรายงานประจำวัน</h2>
+                        <button id="export-daily-archive-btn" class="bg-gray-400 cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg" disabled>ส่งออกและเก็บรายงาน</button>
+                    </div>
+                    <div id="daily-report-container" class="space-y-6"></div>
                 </section>
 
                 <!-- Daily Archive Pane -->
                 <section id="pane-daily-archive" class="tab-pane hidden">
-                     <h2 class="text-xl font-semibold mb-4">รายงานทั้งหมด (อยู่ระหว่างการพัฒนา)</h2>
+                     <h2 class="text-xl font-semibold mb-4">รายงานทั้งหมด</h2>
+                     <div class="flex items-center space-x-4 mb-6 p-4 bg-gray-50 rounded-lg">
+                        <div>
+                            <label for="daily-archive-year-select" class="block text-sm font-medium text-gray-700">เลือกปี (พ.ศ.)</label>
+                            <select id="daily-archive-year-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
+                        </div>
+                        <div>
+                            <label for="daily-archive-month-select" class="block text-sm font-medium text-gray-700">เลือกเดือน</label>
+                            <select id="daily-archive-month-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
+                        </div>
+                        <button id="show-daily-archive-btn" class="self-end bg-indigo-500 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg">แสดงรายงาน</button>
+                    </div>
+                    <div id="daily-archive-container" class="space-y-6"></div>
                 </section>
             </main>
             
         </article>
+    </div>
+
+    <!-- Confirmation Modal (shared) -->
+    <div id="archive-confirm-modal" class="modal fixed inset-0 bg-gray-600 bg-opacity-50 z-20 items-center justify-center">
+        <div class="relative bg-white rounded-lg shadow-xl max-w-sm w-full p-6">
+            <h3 class="text-xl font-semibold mb-4 text-gray-800">ยืนยันการส่งออกและเก็บรายงาน</h3>
+            <p class="text-gray-600 mb-6">เมื่อยืนยันแล้ว ข้อมูลรายงานของวันนี้จะถูกล้างและย้ายไปส่วนรายงานทั้งหมด คุณแน่ใจหรือไม่?</p>
+            <div class="flex justify-end space-x-2">
+                <button id="cancel-archive-btn" type="button" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-bold hover:bg-gray-300">ยกเลิก</button>
+                <button id="confirm-archive-btn" type="button" class="px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700">ยืนยัน</button>
+            </div>
+        </div>
     </div>
     
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script src="daily.js" type="module" defer></script>
 </body>
 </html>
-

@@ -3,19 +3,26 @@
 // --- Imports ---
 import { sendRequest } from './api.js';
 import * as ui from './ui.js'; 
-import { escapeHTML, formatThaiDateRangeArabic } from './utils.js';
+import { escapeHTML, formatThaiDateRangeArabic, exportSingleReportToExcel } from './utils.js';
 
 // --- Global State ---
 window.currentUser = null;
 let currentDepartment = ''; // To store the department being reported
 let currentReportDate = ''; // To store the target date for the report
 let allDailyHistoryData = {}; // To cache history data
+let allArchivedDailyData = {}; // To cache archived daily data
+let currentDailyReports = []; // To store reports for archiving
+window.editingDailyReportData = null; // To hold data for editing
 
 // --- DOM References ---
 let welcomeMessage, logoutBtn, backToSelectionBtn, appContainer, tabs, panes;
 let dailyHistoryYearSelect, dailyHistoryMonthSelect, showDailyHistoryBtn, dailyHistoryContainer;
 let dailySubmissionContent, reviewReportSectionDaily, reviewDailyStatusBtn, backToFormBtnDaily, confirmSubmitDailyBtn;
 let bulkStatusButtonsDaily;
+let dailyReportContainer, dailyArchiveContainer, exportDailyArchiveBtn;
+let dailyArchiveYearSelect, dailyArchiveMonthSelect, showDailyArchiveBtn;
+let archiveConfirmModal, cancelArchiveBtn, confirmArchiveBtn;
+
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,9 +60,21 @@ function assignDomElements() {
     backToFormBtnDaily = document.getElementById('back-to-form-btn-daily');
     confirmSubmitDailyBtn = document.getElementById('confirm-submit-daily-btn');
     bulkStatusButtonsDaily = document.getElementById('bulk-status-buttons-daily');
+
+    // New elements for report and archive
+    dailyReportContainer = document.getElementById('daily-report-container');
+    dailyArchiveContainer = document.getElementById('daily-archive-container');
+    exportDailyArchiveBtn = document.getElementById('export-daily-archive-btn');
+    dailyArchiveYearSelect = document.getElementById('daily-archive-year-select');
+    dailyArchiveMonthSelect = document.getElementById('daily-archive-month-select');
+    showDailyArchiveBtn = document.getElementById('show-daily-archive-btn');
+    
+    archiveConfirmModal = document.getElementById('archive-confirm-modal');
+    cancelArchiveBtn = document.getElementById('cancel-archive-btn');
+    confirmArchiveBtn = document.getElementById('confirm-archive-btn');
 }
 
-function initializePage() {
+async function initializePage() {
     appContainer.classList.remove('hidden');
     welcomeMessage.textContent = `ล็อกอินในฐานะ: ${escapeHTML(currentUser.username)} (${escapeHTML(currentUser.role)})`;
     
@@ -79,6 +98,19 @@ function initializePage() {
 
     if(showDailyHistoryBtn) showDailyHistoryBtn.addEventListener('click', renderFilteredDailyHistory);
     if(dailyHistoryYearSelect) dailyHistoryYearSelect.addEventListener('change', populateDailyHistoryMonths);
+    if(dailyHistoryContainer) dailyHistoryContainer.addEventListener('click', handleDailyHistoryEditClick);
+    
+    if(exportDailyArchiveBtn) exportDailyArchiveBtn.addEventListener('click', () => {
+        if (!currentDailyReports || currentDailyReports.length === 0) {
+            ui.showMessage('ไม่มีข้อมูลรายงานที่จะส่งออก', false);
+            return;
+        }
+        archiveConfirmModal.classList.add('active');
+    });
+    if(cancelArchiveBtn) cancelArchiveBtn.addEventListener('click', () => archiveConfirmModal.classList.remove('active'));
+    if(confirmArchiveBtn) confirmArchiveBtn.addEventListener('click', handleArchiveDailyReport);
+    if(showDailyArchiveBtn) showDailyArchiveBtn.addEventListener('click', renderFilteredDailyArchives);
+    if(dailyArchiveYearSelect) dailyArchiveYearSelect.addEventListener('change', populateDailyArchiveMonths);
 
     const is_admin = (currentUser.role === 'admin');
     document.getElementById('tab-daily-dashboard').classList.toggle('hidden', !is_admin);
@@ -86,9 +118,9 @@ function initializePage() {
     document.getElementById('tab-daily-archive').classList.toggle('hidden', !is_admin);
     
     if (is_admin) {
-        switchTab('tab-daily-dashboard');
+        await switchTab('tab-daily-dashboard');
     } else {
-        switchTab('tab-daily-submit');
+        await switchTab('tab-daily-submit');
     }
 }
 
@@ -96,13 +128,18 @@ function initializePage() {
 // --- Tab Switching and Data Loading ---
 async function loadDataForPane(paneId, department = null) {
     let payload = {};
+    // If a department is passed (e.g., from admin dropdown), use it
     if (department) {
         payload.department = department;
+    } 
+    // If editing, ensure we load the data for the correct department from the report
+    else if (window.editingDailyReportData) {
+        payload.department = window.editingDailyReportData.department;
     }
 
-    reviewReportSectionDaily.classList.add('hidden');
-    dailySubmissionContent.classList.remove('hidden');
-
+    if(dailySubmissionContent) dailySubmissionContent.classList.remove('hidden');
+    if(reviewReportSectionDaily) reviewReportSectionDaily.classList.add('hidden');
+    
     if (paneId === 'pane-daily-submit') {
         try {
             const res = await sendRequest('get_daily_personnel_for_submission', payload);
@@ -141,30 +178,74 @@ async function loadDataForPane(paneId, department = null) {
             ui.showMessage(error.message, false);
         }
     }
+    if (paneId === 'pane-daily-report') {
+        try {
+            const res = await sendRequest('get_daily_final_report', {});
+            if (res.status === 'success') {
+                renderDailyFinalReport(res);
+            }
+        } catch(error) {
+            ui.showMessage(error.message, false);
+        }
+    }
+     if (paneId === 'pane-daily-archive') {
+        try {
+            const res = await sendRequest('get_archived_daily_reports', {});
+            if (res.status === 'success') {
+                allArchivedDailyData = res.archives || {};
+                populateDailyArchiveYears();
+                if(dailyArchiveContainer) dailyArchiveContainer.innerHTML = '<p class="text-center text-gray-500">กรุณาเลือกปีและเดือนเพื่อแสดงประวัติ</p>';
+            }
+        } catch (error) {
+            ui.showMessage(error.message, false);
+        }
+    }
 }
 
-function switchTab(tabId) {
-    tabs.forEach(tab => {
+async function switchTab(tabId) {
+    for (const tab of tabs) {
         const paneId = tab.id.replace('tab-', 'pane-');
         const pane = document.getElementById(paneId);
-        if(!pane) return;
+        if (!pane) continue;
 
         if (tab.id === tabId) {
             tab.classList.add('active');
             tab.style.borderColor = '#0891b2';
             tab.style.color = '#0891b2';
             pane.classList.remove('hidden');
-            loadDataForPane(paneId);
+            await loadDataForPane(paneId);
         } else {
             tab.classList.remove('active');
             tab.style.borderColor = 'transparent';
             tab.style.color = '';
             pane.classList.add('hidden');
         }
-    });
+    }
 }
 
 // --- Event Handlers ---
+async function handleDailyHistoryEditClick(e) {
+    if (!e.target || !e.target.classList.contains('edit-daily-history-btn')) return;
+    
+    const reportId = e.target.dataset.reportId;
+    if (!reportId) return;
+
+    try {
+        const res = await sendRequest('get_daily_report_for_editing', { id: reportId });
+        if (res.status === 'success' && res.report) {
+            window.editingDailyReportData = res.report;
+            if (currentUser.role === 'admin') {
+                // We don't need to set the dropdown here because loadDataForPane will handle it
+            }
+            switchTab('tab-daily-submit');
+        } else {
+            ui.showMessage(res.message || 'ไม่สามารถดึงข้อมูลรายงานมาแก้ไขได้', false);
+        }
+    } catch (error) {
+        ui.showMessage(error.message, false);
+    }
+}
+
 function handleReviewDailyStatus() {
     const categories = {
         officer: { title: 'นายทหารสัญญาบัตร', reviewArea: 'review-list-area-officer', container: 'submission-list-officer' },
@@ -295,6 +376,19 @@ async function handleSubmitDailyReport() {
     }
 }
 
+async function handleArchiveDailyReport() {
+    archiveConfirmModal.classList.remove('active');
+    try {
+        const response = await sendRequest('archive_daily_reports', { reports: currentDailyReports });
+        ui.showMessage(response.message, response.status === 'success');
+        if (response.status === 'success') {
+            loadDataForPane('pane-daily-report');
+        }
+    } catch(error) {
+        ui.showMessage(error.message, false);
+    }
+}
+
 
 // --- Rendering and UI Update Functions ---
 function formatThaiDate(isoDateString) {
@@ -370,15 +464,45 @@ function updateCategorySummary(categoryKey) {
 }
 
 function renderSubmissionForm(res) {
-    const { personnel, report_date, all_departments } = res;
-    
-    // Render Admin Department Selector
+    const { personnel, report_date, all_departments, submission_status } = res;
+
+    const submissionInfoArea = document.getElementById('submission-info-area-daily');
+    const submissionContent = document.getElementById('daily-submission-content');
     const adminSelectorContainer = document.getElementById('admin-dept-selector-container-daily');
+    
+    // Logic for showing/hiding form based on submission status
+    if (submission_status) {
+        const submittedTime = new Date(submission_status.timestamp).toLocaleString('th-TH', { dateStyle: 'full', timeStyle: 'short' });
+        let message = `คุณได้ส่งยอดสำหรับวันที่ ${formatThaiDate(report_date)} ไปแล้วเมื่อ ${submittedTime} น.`;
+        if (currentUser.role === 'admin') {
+            message = `แผนกนี้ได้ส่งยอดสำหรับวันที่ ${formatThaiDate(report_date)} ไปแล้วเมื่อ ${submittedTime} น. 
+                       <button id="go-to-history-btn" class="ml-2 text-sm text-blue-600 underline">คลิกที่นี่เพื่อแก้ไข</button>`;
+        }
+        submissionInfoArea.innerHTML = message;
+        submissionInfoArea.classList.remove('hidden');
+        submissionContent.classList.add('hidden');
+
+        if (document.getElementById('go-to-history-btn')) {
+            document.getElementById('go-to-history-btn').addEventListener('click', () => switchTab('tab-daily-history'));
+        }
+        // For admins, we still show the department selector
+        if (currentUser.role !== 'admin') {
+            adminSelectorContainer.classList.add('hidden');
+        }
+    } else {
+        submissionInfoArea.classList.add('hidden');
+        submissionContent.classList.remove('hidden');
+        adminSelectorContainer.classList.remove('hidden');
+    }
+
+    // Render Admin Department Selector
     adminSelectorContainer.innerHTML = '';
     if (currentUser.role === 'admin' && all_departments) {
-        let selectorHTML = `<label for="admin-dept-selector" class="block text-sm font-medium text-gray-700 mb-1">เลือกแผนกเพื่อส่งยอด</label>
+        // If editing, make sure the dropdown shows the correct department
+        const departmentToSelect = window.editingDailyReportData ? window.editingDailyReportData.department : currentDepartment;
+        let selectorHTML = `<label for="admin-dept-selector-daily" class="block text-sm font-medium text-gray-700 mb-1">เลือกแผนก</label>
             <select id="admin-dept-selector-daily" class="w-full md:w-1/3 border rounded px-2 py-2 bg-white shadow-sm">
-            ${all_departments.map(dept => `<option value="${dept}" ${dept === currentDepartment ? 'selected' : ''}>${dept}</option>`).join('')}
+            ${all_departments.map(dept => `<option value="${dept}" ${dept === departmentToSelect ? 'selected' : ''}>${dept}</option>`).join('')}
             </select>`;
         adminSelectorContainer.innerHTML = selectorHTML;
         document.getElementById('admin-dept-selector-daily').addEventListener('change', (e) => {
@@ -487,10 +611,128 @@ function renderSubmissionForm(res) {
         });
         updateCategorySummary(key);
     }
+    
+    // Pre-fill form if editing
+    if (window.editingDailyReportData) {
+        const categories = ['officer', 'nco', 'civilian'];
+        categories.forEach(key => {
+            const items = window.editingDailyReportData.report_data[key];
+            if (items && items.length > 0) {
+                const itemMap = items.reduce((map, item) => {
+                    map[item.personnel_id] = item;
+                    return map;
+                }, {});
+
+                const containerEl = document.getElementById(`submission-list-${key}`);
+                containerEl.querySelectorAll('tbody > tr').forEach(row => {
+                    const personId = row.dataset.id;
+                    if (itemMap[personId]) {
+                        const savedItem = itemMap[personId];
+                        row.querySelector('.status-select').value = savedItem.status;
+                        row.querySelector('.details-input').value = savedItem.details;
+                        const startDatePicker = row.querySelector('.start-date-input')._flatpickr;
+                        if (startDatePicker) startDatePicker.setDate(savedItem.start_date);
+                        const endDatePicker = row.querySelector('.end-date-input')._flatpickr;
+                        if (endDatePicker) endDatePicker.setDate(savedItem.end_date);
+                    }
+                });
+            }
+        });
+        window.editingDailyReportData = null; // Clear after use
+    }
+    
     reviewReportSectionDaily.classList.add('hidden');
-    dailySubmissionContent.classList.remove('hidden');
 }
 
+// --- Daily Report and Archive Rendering ---
+function renderDailyFinalReport(res) {
+    const { reports, report_date, all_departments, submitted_departments } = res;
+    currentDailyReports = reports;
+
+    const titleEl = document.querySelector('#pane-daily-report h2');
+    titleEl.textContent = `ส่งรายงานประจำวัน (${formatThaiDate(report_date)})`;
+
+    dailyReportContainer.innerHTML = '';
+    
+    const allSubmitted = all_departments.length > 0 && all_departments.every(dept => submitted_departments.includes(dept));
+
+    if (exportDailyArchiveBtn) {
+        exportDailyArchiveBtn.disabled = !allSubmitted;
+        exportDailyArchiveBtn.classList.toggle('bg-gray-400', !allSubmitted);
+        exportDailyArchiveBtn.classList.toggle('cursor-not-allowed', !allSubmitted);
+        exportDailyArchiveBtn.classList.toggle('bg-blue-500', allSubmitted);
+        exportDailyArchiveBtn.classList.toggle('hover:bg-blue-700', allSubmitted);
+        exportDailyArchiveBtn.title = allSubmitted ? 'ส่งออกและเก็บรายงาน' : 'ต้องรอให้ทุกแผนกส่งรายงานก่อน';
+    }
+
+    if (!reports || reports.length === 0) {
+        dailyReportContainer.innerHTML = '<p class="text-center text-gray-500">ยังไม่มีแผนกใดส่งรายงานสำหรับวันนี้</p>';
+        return;
+    }
+
+    reports.forEach(report => {
+        const reportWrapper = document.createElement('div');
+        reportWrapper.className = 'p-4 border rounded-lg bg-gray-50 mb-4';
+        const { officer, nco, civilian } = report.summary_data;
+        
+        let reportDetailsHTML = '';
+        const categories = {'officer': 'สัญญาบัตร', 'nco': 'ประทวน', 'civilian': 'พลเรือน'};
+        let allItems = [];
+
+        for (const key in categories) {
+            const items = report.report_data[key] || [];
+             if(items.length > 0) {
+                 items.forEach(item => {
+                    allItems.push({
+                        ...item,
+                        category: categories[key],
+                    });
+                });
+             }
+        }
+        
+        if (allItems.length > 0) {
+            reportDetailsHTML += '<div class="overflow-x-auto mt-3">';
+            reportDetailsHTML += '<table class="min-w-full bg-white text-sm">';
+            reportDetailsHTML += `<thead class="bg-gray-100"><tr>
+                <th class="px-2 py-2 text-left font-medium text-gray-600">ประเภท</th>
+                <th class="px-2 py-2 text-left font-medium text-gray-600">ยศ-ชื่อ-สกุล</th>
+                <th class="px-2 py-2 text-left font-medium text-gray-600">สถานะ</th>
+                <th class="px-2 py-2 text-left font-medium text-gray-600">รายละเอียด</th>
+                <th class="px-2 py-2 text-left font-medium text-gray-600">ช่วงวันที่</th>
+            </tr></thead>`;
+            reportDetailsHTML += '<tbody class="divide-y divide-gray-200">';
+
+            allItems.forEach(item => {
+                 const personnelName = `${item.rank || ''} ${item.first_name || ''} ${item.last_name || ''}`.trim();
+                 reportDetailsHTML += `<tr>
+                    <td class="px-2 py-2">${escapeHTML(item.category)}</td>
+                    <td class="px-2 py-2">${escapeHTML(personnelName)}</td>
+                    <td class="px-2 py-2">${escapeHTML(item.status)}</td>
+                    <td class="px-2 py-2">${escapeHTML(item.details)}</td>
+                    <td class="px-2 py-2">${formatThaiDateRangeArabic(item.start_date, item.end_date)}</td>
+                 </tr>`;
+            });
+            reportDetailsHTML += '</tbody></table></div>';
+        }
+        
+        reportWrapper.innerHTML = `
+            <div class="flex flex-wrap justify-between items-center mb-2 gap-2">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-800">${escapeHTML(report.department)}</h3>
+                    <p class="text-sm text-gray-500">ส่งโดย: ${escapeHTML(report.rank)} ${escapeHTML(report.first_name)} ${escapeHTML(report.last_name)} (เวลา ${new Date(report.timestamp).toLocaleTimeString('th-TH')})</p>
+                </div>
+            </div>
+            <div class="mt-2 text-sm text-gray-700 space-y-1 p-3 bg-white rounded border">
+                <p><b>สัญญาบัตร:</b> ยอด ${officer.total}, ว่าง ${officer.available}, ภารกิจ ${officer.mission}</p>
+                <p><b>ประทวน:</b> ยอด ${nco.total}, ว่าง ${nco.available}, ภารกิจ ${nco.mission}</p>
+                <p><b>พลเรือน:</b> ยอด ${civilian.total}, ว่าง ${civilian.available}, ภารกิจ ${civilian.mission}</p>
+            </div>
+            ${reportDetailsHTML}
+        `;
+        dailyReportContainer.appendChild(reportWrapper);
+    });
+}
 
 // --- Daily History Functions ---
 function populateDailyHistoryYears() {
@@ -552,15 +794,97 @@ function renderFilteredDailyHistory() {
         let submittedByText = (currentUser.role === 'admin') ? `แผนก: ${escapeHTML(report.department)} | ` : '';
         submittedByText += `ส่งโดย: ${escapeHTML(report.submitted_by)}`;
 
+        const editButtonHtml = `<button data-report-id="${report.id}" class="edit-daily-history-btn bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-bold py-1 px-3 rounded-lg">แก้ไข</button>`;
+
         reportWrapper.innerHTML = `
             <div class="flex flex-wrap justify-between items-center mb-2 gap-2">
                 <div>
                     <h4 class="text-lg font-semibold text-gray-800">รายงานสำหรับวันที่ ${formatThaiDate(report.report_date)}</h4>
                     <span class="text-sm text-gray-500">${submittedByText} (เวลา ${new Date(report.timestamp).toLocaleTimeString('th-TH')})</span>
                 </div>
+                ${editButtonHtml}
             </div>
             ${summaryHtml}`;
         dailyHistoryContainer.appendChild(reportWrapper);
     });
 }
 
+// --- Daily Archive Functions ---
+function populateDailyArchiveYears() {
+    dailyArchiveYearSelect.innerHTML = '<option value="">เลือกปี</option>';
+    if (allArchivedDailyData && Object.keys(allArchivedDailyData).length > 0) {
+        const sortedYears = Object.keys(allArchivedDailyData).sort((a, b) => b - a);
+        sortedYears.forEach(year => {
+            const option = document.createElement('option');
+            option.value = year;
+            option.textContent = parseInt(year) + 543;
+            dailyArchiveYearSelect.appendChild(option);
+        });
+    }
+}
+
+function populateDailyArchiveMonths() {
+    const selectedYear = dailyArchiveYearSelect.value;
+    dailyArchiveMonthSelect.innerHTML = '<option value="">เลือกเดือน</option>';
+    if (selectedYear && allArchivedDailyData[selectedYear]) {
+        const sortedMonths = Object.keys(allArchivedDailyData[selectedYear]).sort((a, b) => b - a);
+        sortedMonths.forEach(month => {
+            const option = document.createElement('option');
+            option.value = month;
+            option.textContent = new Date(2000, parseInt(month) - 1, 1).toLocaleString('th-TH', { month: 'long' });
+            dailyArchiveMonthSelect.appendChild(option);
+        });
+    }
+}
+
+function renderFilteredDailyArchives() {
+    const year = dailyArchiveYearSelect.value;
+    const month = dailyArchiveMonthSelect.value;
+    if (!year || !month) {
+        ui.showMessage('กรุณาเลือกปีและเดือน', false);
+        return;
+    }
+    const reportsForMonth = allArchivedDailyData[year] ? allArchivedDailyData[year][month] : [];
+    
+    dailyArchiveContainer.innerHTML = '';
+
+    if (!reportsForMonth || reportsForMonth.length === 0) {
+        dailyArchiveContainer.innerHTML = '<p class="text-center text-gray-500">ไม่พบรายงานที่เก็บถาวรสำหรับเดือนที่เลือก</p>';
+        return;
+    }
+
+    const reportsByDate = reportsForMonth.reduce((acc, report) => {
+        const date = report.report_date;
+        if(!acc[date]) acc[date] = [];
+        acc[date].push(report);
+        return acc;
+    }, {});
+
+    Object.keys(reportsByDate).sort((a,b) => new Date(b) - new Date(a)).forEach(date => {
+        const dateCard = document.createElement('div');
+        dateCard.className = 'mb-6 p-4 border rounded-lg bg-gray-50';
+        
+        let reportsHtml = '';
+        reportsByDate[date].forEach(report => {
+            const { officer, nco, civilian } = report.summary_data;
+            reportsHtml += `
+            <div class="mt-4 p-3 bg-white rounded border">
+                 <p class="text-md font-semibold text-gray-800">${escapeHTML(report.department)}</p>
+                 <p class="text-xs text-gray-500 mb-2">ส่งโดย: ${escapeHTML(report.submitted_by)}</p>
+                 <div class="text-xs text-gray-700 space-y-1">
+                    <p><b>สัญญาบัตร:</b> ยอด ${officer.total}, ว่าง ${officer.available}, ภารกิจ ${officer.mission}</p>
+                    <p><b>ประทวน:</b> ยอด ${nco.total}, ว่าง ${nco.available}, ภารกิจ ${nco.mission}</p>
+                    <p><b>พลเรือน:</b> ยอด ${civilian.total}, ว่าง ${civilian.available}, ภารกิจ ${civilian.mission}</p>
+                 </div>
+            </div>`;
+        });
+        
+        dateCard.innerHTML = `
+            <div class="flex justify-between items-center">
+                <h3 class="text-lg font-semibold text-gray-800">รายงานวันที่ ${formatThaiDate(date)}</h3>
+            </div>
+            ${reportsHtml}
+        `;
+        dailyArchiveContainer.appendChild(dateCard);
+    });
+}

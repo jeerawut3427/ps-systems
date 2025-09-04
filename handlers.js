@@ -2,10 +2,8 @@
 // Contains all event handler functions.
 
 import { sendRequest } from './api.js';
-import { showMessage, openPersonnelModal, openUserModal, renderArchivedReports, renderFilteredHistoryReports, showConfirmModal } from './ui.js';
-import { exportSingleReportToExcel, formatThaiDateArabic, formatThaiDateRangeArabic, escapeHTML } from './utils.js';
-
-// All functions access global variables and DOM via the window object
+import { showMessage, openPersonnelModal, openUserModal, showConfirmModal, addStatusRow, renderArchivedReports, renderFilteredHistoryReports } from './ui.js';
+import { exportSingleReportToExcel, formatThaiDateRangeArabic, escapeHTML } from './utils.js';
 
 export async function handlePersonnelFormSubmit(e) {
     e.preventDefault();
@@ -363,3 +361,84 @@ export async function handleWeeklyReportEditClick(e) {
         showMessage(error.message, false);
     }
 }
+
+// *** NEW: Holiday Handlers ***
+export async function renderHolidays(res) {
+    const { holidays } = res;
+    if (!window.holidayListContainer) return;
+    window.holidayListContainer.innerHTML = '';
+
+    if (!holidays || holidays.length === 0) {
+        window.holidayListContainer.innerHTML = '<p class="text-center text-gray-500 p-4">ยังไม่มีวันหยุดที่กำหนดไว้</p>';
+        return;
+    }
+    
+    let holidayHTML = '<table class="min-w-full bg-white divide-y divide-gray-200">';
+    holidayHTML += `<thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">วันที่</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">รายละเอียด</th>
+                            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">จัดการ</th>
+                        </tr>
+                    </thead>`;
+    holidayHTML += '<tbody class="bg-white divide-y divide-gray-200">';
+
+    holidays.forEach(holiday => {
+        const formattedDate = new Date(holiday.date + 'T00:00:00').toLocaleDateString('th-TH', {
+            dateStyle: 'full'
+        });
+        holidayHTML += `<tr>
+            <td class="px-6 py-4 whitespace-nowrap">${formattedDate}</td>
+            <td class="px-6 py-4 whitespace-nowrap">${escapeHTML(holiday.description)}</td>
+            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                <button data-date="${escapeHTML(holiday.date)}" class="delete-holiday-btn text-red-600 hover:text-red-900">ลบ</button>
+            </td>
+        </tr>`;
+    });
+
+    holidayHTML += '</tbody></table>';
+    window.holidayListContainer.innerHTML = holidayHTML;
+}
+
+export async function handleAddHoliday(e) {
+    e.preventDefault(); // This is the crucial line to prevent page reload
+    const holidayDate = document.getElementById('holiday-date').value;
+    const description = document.getElementById('holiday-description').value;
+    
+    if (!holidayDate || !description) {
+        showMessage('กรุณากรอกข้อมูลให้ครบถ้วน', false);
+        return;
+    }
+    
+    try {
+        const res = await sendRequest('add_holiday', { date: holidayDate, description });
+        showMessage(res.message, res.status === 'success');
+        if (res.status === 'success') {
+            window.holidayForm.reset();
+            if (window.holidayDatepicker) {
+                window.holidayDatepicker.clear();
+            }
+            window.loadDataForPane('pane-holidays');
+        }
+    } catch (error) {
+        showMessage(error.message, false);
+    }
+}
+
+export async function handleDeleteHoliday(e) {
+    if (!e.target.classList.contains('delete-holiday-btn')) return;
+    
+    const holidayDate = e.target.dataset.date;
+    showConfirmModal('ยืนยันการลบ', `คุณแน่ใจหรือไม่ว่าต้องการลบวันหยุดนี้ (${holidayDate})?`, async () => {
+        try {
+            const res = await sendRequest('delete_holiday', { date: holidayDate });
+            showMessage(res.message, res.status === 'success');
+            if (res.status === 'success') {
+                window.loadDataForPane('pane-holidays');
+            }
+        } catch (error) {
+            showMessage(error.message, false);
+        }
+    });
+}
+

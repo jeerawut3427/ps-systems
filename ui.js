@@ -281,8 +281,8 @@ export function renderStatusSubmissionForm(res) {
 
     if (!selectorContainer || !bulkButtonContainer || !window.statusSubmissionListArea || !window.submitStatusTitle || !submissionInfoArea || !submissionForm) return;
 
-    if (window.currentUser.role !== 'admin' && submissionStatus && !window.editingReportData) {
-        const submittedTime = new Date(submissionStatus.timestamp).toLocaleString('th-TH');
+    if (window.currentUser.role !== 'admin' && submission_status && !window.editingReportData) {
+        const submittedTime = new Date(submission_status.timestamp).toLocaleString('th-TH');
         submissionInfoArea.innerHTML = `คุณได้ส่งยอดสำหรับรอบนี้ไปแล้วเมื่อ ${submittedTime} น.`;
         submissionInfoArea.classList.remove('hidden');
         submissionForm.classList.add('hidden');
@@ -982,4 +982,3 @@ export function renderActiveStatuses(res) {
     // Render the initial view with 'ทั้งหมด' filter
     updateActiveStatusesView('ทั้งหมด');
 }
-

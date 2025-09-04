@@ -217,6 +217,33 @@
                      <div class="overflow-x-auto"><table class="min-w-full bg-white"><thead class="bg-gray-50"><tr><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Username</th><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ยศ-ชื่อ-สกุล</th><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">ตำแหน่ง</th><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">แผนก</th><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">สิทธิ์</th><th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">จัดการ</th></tr></thead><tbody id="user-list-area" class="bg-white divide-y divide-gray-200"></tbody></table></div>
                      <div id="user-pagination" class="mt-4 flex justify-between items-center"></div>
                 </section>
+                <section id="pane-holidays" class="tab-pane hidden">
+    <h2 class="text-xl font-semibold mb-4">จัดการวันหยุดนักขัตฤกษ์</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <div class="md:col-span-1">
+            <form id="holiday-form" class="bg-gray-50 p-6 rounded-lg border">
+                <h3 class="text-lg font-medium mb-4">เพิ่มวันหยุดใหม่</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label for="holiday-date" class="block text-sm font-medium text-gray-700">วันที่</label>
+                        <input type="text" id="holiday-date" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required placeholder="เลือกวันที่...">
+                    </div>
+                    <div>
+                        <label for="holiday-description" class="block text-sm font-medium text-gray-700">รายละเอียด</label>
+                        <input type="text" id="holiday-description" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm" required placeholder="เช่น วันปีใหม่">
+                    </div>
+                </div>
+                <div class="mt-6">
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg">เพิ่มวันหยุด</button>
+                </div>
+            </form>
+        </div>
+        <div class="md:col-span-2">
+             <div id="holiday-list-container" class="overflow-y-auto" style="max-height: 60vh;">
+                </div>
+        </div>
+    </div>
+</section>
             </main>
             
         </article>

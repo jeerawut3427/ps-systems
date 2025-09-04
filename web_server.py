@@ -7,7 +7,7 @@ import hmac
 import base64
 import uuid
 import sqlite3
-import secrets 
+import secrets
 from html import escape
 from datetime import datetime, date, timedelta
 from collections import defaultdict
@@ -27,18 +27,18 @@ SESSION_TIMEOUT_SECONDS = 1800 # 30 minutes
 ITEMS_PER_PAGE = 15 # Pagination limit
 
 RANK_ORDER = [
-    'น.อ.(พ)', 'น.อ.(พ).หญิง', 'น.อ.หม่อมหลวง', 'น.อ.', 'น.อ.หญิง', 
-    'น.ท.', 'น.ท.หญิง', 'น.ต.', 'น.ต.หญิง', 
+    'น.อ.(พ)', 'น.อ.(พ).หญิง', 'น.อ.หม่อมหลวง', 'น.อ.', 'น.อ.หญิง',
+    'น.ท.', 'น.ท.หญิง', 'น.ต.', 'น.ต.หญิง',
     'ร.อ.', 'ร.อ.หญิง', 'ร.ท.', 'ร.ท.หญิง', 'ร.ต.', 'ร.ต.หญิง',
-    'พ.อ.อ.(พ)', 'พ.อ.อ.', 'พ.อ.อ.หญิง', 'พ.อ.ท.', 'พ.อ.ท.หญิง', 
-    'พ.อ.ต.', 'พ.อ.ต.หญิง', 'จ.อ.', 'จ.อ.หญิง', 'จ.ท.', 'จ.ท.หญิง', 
+    'พ.อ.อ.(พ)', 'พ.อ.อ.', 'พ.อ.อ.หญิง', 'พ.อ.ท.', 'พ.อ.ท.หญิง',
+    'พ.อ.ต.', 'พ.อ.ต.หญิง', 'จ.อ.', 'จ.อ.หญิง', 'จ.ท.', 'จ.ท.หญิง',
     'จ.ต.', 'จ.ต.หญิง', 'นาย', 'นาง', 'นางสาว'
 ]
 
 # --- START: NEW CONFIGURATION FOR DAILY SYSTEM ---
 # Dictionary to classify ranks into personnel types
 RANK_CLASSIFICATION = {
-    'officer': ['น.อ.(พ)', 'น.อ.หม่อมหลวง', 'น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.', 
+    'officer': ['น.อ.(พ)', 'น.อ.หม่อมหลวง', 'น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.',
                 'น.อ.(พ).หญิง', 'น.อ.หญิง', 'น.ท.หญิง', 'น.ต.หญิง', 'ร.อ.หญิง', 'ร.ท.หญิง', 'ร.ต.หญิง'],
     'nco': ['พ.อ.อ.(พ)', 'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.',
             'พ.อ.อ.หญิง', 'พ.อ.ท.หญิง', 'พ.อ.ต.หญิง', 'จ.อ.หญิง', 'จ.ท.หญิง', 'จ.ต.หญิง'],
@@ -74,6 +74,36 @@ def get_next_week_range_str():
         return f"{start_day} {start_month} - {end_day} {end_month} {end_year_be}"
         
     return f"{start_day} - {end_day} {end_month} {end_year_be}"
+
+# --- START: NEW HELPER FOR DAILY SYSTEM LOGIC ---
+def get_daily_target_date(cursor):
+    """
+    Determines the next working day for daily reports, skipping weekends and holidays.
+    """
+    cursor.execute("SELECT date FROM holidays")
+    holidays = {date.fromisoformat(row['date']) for row in cursor.fetchall()}
+
+    cursor.execute("SELECT MAX(report_date) FROM archived_daily_reports")
+    last_archived_row = cursor.fetchone()
+    start_date = date.today()
+    if last_archived_row and last_archived_row[0]:
+        start_date = date.fromisoformat(last_archived_row[0])
+
+    cursor.execute("SELECT MAX(report_date) FROM daily_reports")
+    last_daily_row = cursor.fetchone()
+    if last_daily_row and last_daily_row[0]:
+        last_daily_date = date.fromisoformat(last_daily_row[0])
+        if last_daily_date > start_date:
+            return last_daily_date
+
+    next_day = start_date
+    while True:
+        next_day += timedelta(days=1)
+        # weekday() -> Monday is 0 and Sunday is 6
+        if next_day.weekday() >= 5 or next_day in holidays:
+            continue
+        return next_day
+# --- END: NEW HELPER FOR DAILY SYSTEM LOGIC ---
 
 
 # --- Database Functions ---
@@ -127,6 +157,13 @@ def init_db():
             timestamp DATETIME,
             summary_data TEXT,
             report_data TEXT
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS holidays (
+            date TEXT PRIMARY KEY,
+            description TEXT NOT NULL
         )
     ''')
 
@@ -191,7 +228,7 @@ def handle_login(payload, conn, cursor, client_address):
     if user_data and verify_password(user_data['salt'], user_data['key'], password):
         if ip_address in FAILED_LOGIN_ATTEMPTS: del FAILED_LOGIN_ATTEMPTS[ip_address]
         session_token = secrets.token_hex(16)
-        cursor.execute("INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)", 
+        cursor.execute("INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)",
                        (session_token, user_data["username"], datetime.now()))
         conn.commit()
         user_info = {k: user_data[k] for k in user_data.keys() if k not in ['salt', 'key']}
@@ -355,11 +392,11 @@ def handle_list_personnel(payload, conn, cursor, session):
         persistent_statuses = [dict(row) for row in cursor.fetchall()]
 
     response_data = {
-        "status": "success", 
-        "personnel": personnel, 
-        "total": total_items, 
-        "page": page, 
-        "submission_status": submission_status, 
+        "status": "success",
+        "personnel": personnel,
+        "total": total_items,
+        "page": page,
+        "submission_status": submission_status,
         "weekly_date_range": get_next_week_range_str(),
         "persistent_statuses": persistent_statuses
     }
@@ -427,8 +464,8 @@ def handle_submit_status_report(payload, conn, cursor, session):
     for item in report_data.get("items", []):
         if item.get("status") != "ไม่มี" and item.get("end_date", "") >= today_str:
             cursor.execute(
-                """INSERT INTO persistent_statuses 
-                   (id, personnel_id, department, status, details, start_date, end_date) 
+                """INSERT INTO persistent_statuses
+                   (id, personnel_id, department, status, details, start_date, end_date)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(uuid.uuid4()),
@@ -459,8 +496,8 @@ def handle_get_status_reports(payload, conn, cursor):
     all_departments = [row['department'] for row in cursor.fetchall()]
 
     return {
-        "status": "success", 
-        "reports": reports, 
+        "status": "success",
+        "reports": reports,
         "weekly_date_range": get_next_week_range_str(),
         "all_departments": all_departments,
         "submitted_departments": list(submitted_departments)
@@ -493,11 +530,11 @@ def handle_get_submission_history(payload, conn, cursor, session):
     user_dept = session.get("department")
     if not user_dept: return {"status": "error", "message": "ไม่พบข้อมูลแผนกของผู้ใช้"}
     query = """
-    SELECT id, date, submitted_by, department, timestamp, report_data, 'active' as source 
-    FROM status_reports WHERE department = :dept 
-    UNION ALL 
-    SELECT id, date, submitted_by, department, timestamp, report_data, 'archived' as source 
-    FROM archived_reports WHERE department = :dept 
+    SELECT id, date, submitted_by, department, timestamp, report_data, 'active' as source
+    FROM status_reports WHERE department = :dept
+    UNION ALL
+    SELECT id, date, submitted_by, department, timestamp, report_data, 'archived' as source
+    FROM archived_reports WHERE department = :dept
     ORDER BY timestamp DESC
     """
     cursor.execute(query, {"dept": user_dept})
@@ -522,10 +559,10 @@ def handle_get_report_for_editing(payload, conn, cursor):
     if not report_id: return {"status": "error", "message": "ไม่พบ ID ของรายงาน"}
     cursor.execute("SELECT report_data, department FROM status_reports WHERE id = ?", (report_id,))
     report = cursor.fetchone()
-    if not report: 
+    if not report:
         cursor.execute("SELECT report_data, department FROM archived_reports WHERE id = ?", (report_id,))
         report = cursor.fetchone()
-    if report: 
+    if report:
         return {"status": "success", "report": {"items": json.loads(report['report_data']), "department": report['department']}}
     return {"status": "error", "message": "ไม่พบข้อมูลรายงาน"}
 
@@ -535,7 +572,7 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     department = session.get("department")
 
     query_unavailable = """
-        SELECT 
+        SELECT
             ps.status, ps.details, ps.start_date, ps.end_date, ps.personnel_id,
             p.rank, p.first_name, p.last_name, p.department
         FROM persistent_statuses ps
@@ -574,32 +611,26 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     total_personnel_in_scope = len(all_personnel)
 
     return {
-        "status": "success", 
+        "status": "success",
         "active_statuses": unavailable_personnel,
         "available_personnel": available_personnel,
         "total_personnel": total_personnel_in_scope
     }
 
-# --- START: NEW ACTION HANDLERS FOR DAILY SYSTEM ---
+# --- START: DAILY SYSTEM ACTION HANDLERS (REVISED LOGIC) ---
 def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
-    """Fetches a summary of daily report submissions for all departments for the next logical day."""
-    today = date.today()
-    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ?", (today.strftime('%Y-%m-%d'),))
-    if cursor.fetchone():
-        target_date = today + timedelta(days=1)
-    else:
-        target_date = today
+    target_date = get_daily_target_date(cursor)
     target_date_str = target_date.strftime('%Y-%m-%d')
     
     cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != ''")
     all_departments = [row['department'] for row in cursor.fetchall()]
 
     query = """
-        SELECT 
-            dr.department, dr.summary_data, dr.timestamp, 
-            u.rank, u.first_name, u.last_name 
-        FROM daily_reports dr 
-        JOIN users u ON dr.submitted_by = u.username 
+        SELECT
+            dr.department, dr.summary_data, dr.timestamp,
+            u.rank, u.first_name, u.last_name
+        FROM daily_reports dr
+        JOIN users u ON dr.submitted_by = u.username
         WHERE dr.report_date = ?
     """
     cursor.execute(query, (target_date_str,))
@@ -609,8 +640,8 @@ def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
         submitter_fullname = f"{row['rank']} {row['first_name']} {row['last_name']}"
         summary = json.loads(row['summary_data'])
         submitted_info[row['department']] = {
-            'submitter_fullname': submitter_fullname, 
-            'timestamp': row['timestamp'], 
+            'submitter_fullname': submitter_fullname,
+            'timestamp': row['timestamp'],
             'summary': {
                 'officer': summary.get('officer', {}),
                 'nco': summary.get('nco', {}),
@@ -622,30 +653,36 @@ def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
 
 def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
     is_admin = session.get("role") == "admin"
+    user_department = session.get("department")
     all_departments = []
-    
+
     if is_admin:
         cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != '' ORDER BY department")
         all_departments = [row['department'] for row in cursor.fetchall()]
 
-    department = (payload.get("department") or (all_departments[0] if all_departments else None)) if is_admin else session.get("department")
+    department_to_view = (payload.get("department") or (all_departments[0] if all_departments else None)) if is_admin else user_department
 
-    if not department:
-        response_data = {"status": "success", "personnel": {'officer':[], 'nco':[], 'civilian':[]}, "department": "", "report_date": date.today().isoformat()}
+    if not department_to_view:
+        response_data = {"status": "success", "personnel": {'officer':[], 'nco':[], 'civilian':[]}, "department": "", "report_date": date.today().isoformat(), "submission_status": None}
         if is_admin: response_data["all_departments"] = all_departments
         return response_data
 
-    today = date.today()
-    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ? AND department = ?", (today.strftime('%Y-%m-%d'), department))
-    target_date = today + timedelta(days=1) if cursor.fetchone() else today
+    target_date = get_daily_target_date(cursor)
     target_date_str = target_date.isoformat()
 
-    cursor.execute("SELECT * FROM personnel WHERE department = ?", (department,))
+    submission_status = None
+    if not is_admin:
+        cursor.execute("SELECT timestamp FROM daily_reports WHERE report_date = ? AND department = ?", (target_date_str, user_department))
+        last_submission = cursor.fetchone()
+        if last_submission:
+            submission_status = {"timestamp": last_submission['timestamp']}
+
+    cursor.execute("SELECT * FROM personnel WHERE department = ?", (department_to_view,))
     personnel_in_dept = [dict(row) for row in cursor.fetchall()]
     classified_personnel = classify_personnel(personnel_in_dept)
     
-    cursor.execute("SELECT * FROM persistent_statuses WHERE end_date >= ? AND start_date <= ? AND department = ?", 
-                   (target_date_str, target_date_str, department))
+    cursor.execute("SELECT * FROM persistent_statuses WHERE end_date >= ? AND start_date <= ? AND department = ?",
+                   (target_date_str, target_date_str, department_to_view))
     active_statuses = {row['personnel_id']: dict(row) for row in cursor.fetchall()}
 
     for category in classified_personnel:
@@ -661,8 +698,16 @@ def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
                 person['start_date'] = ''
                 person['end_date'] = ''
                 
-    response_data = {"status": "success", "personnel": classified_personnel, "department": department, "report_date": target_date_str}
-    if is_admin: response_data["all_departments"] = all_departments
+    response_data = {
+        "status": "success",
+        "personnel": classified_personnel,
+        "department": department_to_view,
+        "report_date": target_date_str,
+        "submission_status": submission_status
+    }
+
+    if is_admin:
+        response_data["all_departments"] = all_departments
         
     return response_data
 
@@ -689,7 +734,7 @@ def handle_submit_daily_report(payload, conn, cursor, session):
     personnel_in_dept = cursor.fetchall()
     
     nco_civ_ids = [
-        p['id'] for p in personnel_in_dept 
+        p['id'] for p in personnel_in_dept
         if p['rank'] in RANK_CLASSIFICATION['nco'] or p['rank'] in RANK_CLASSIFICATION['civilian']
     ]
 
@@ -741,17 +786,15 @@ def handle_get_daily_submission_history(payload, conn, cursor, session):
     return {"status": "success", "history": dict(history_by_month)}
 
 def handle_get_daily_final_report(payload, conn, cursor, session):
-    today = date.today()
-    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ?", (today.strftime('%Y-%m-%d'),))
-    target_date = today + timedelta(days=1) if cursor.fetchone() else today
+    target_date = get_daily_target_date(cursor)
     target_date_str = target_date.strftime('%Y-%m-%d')
 
     cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != '' ORDER BY department")
     all_departments = [row['department'] for row in cursor.fetchall()]
     
     query = """
-        SELECT dr.*, u.rank, u.first_name, u.last_name 
-        FROM daily_reports dr JOIN users u ON dr.submitted_by = u.username 
+        SELECT dr.*, u.rank, u.first_name, u.last_name
+        FROM daily_reports dr JOIN users u ON dr.submitted_by = u.username
         WHERE dr.report_date = ?
     """
     cursor.execute(query, (target_date_str,))
@@ -764,8 +807,8 @@ def handle_get_daily_final_report(payload, conn, cursor, session):
     submitted_departments = [r['department'] for r in reports]
     
     return {
-        "status": "success", 
-        "reports": reports, 
+        "status": "success",
+        "reports": reports,
         "report_date": target_date_str,
         "all_departments": all_departments,
         "submitted_departments": submitted_departments
@@ -782,13 +825,15 @@ def handle_archive_daily_reports(payload, conn, cursor, session):
         cursor.execute("DELETE FROM archived_daily_reports WHERE report_date = ? AND department = ?", (report_date, department))
         year, month, _ = map(int, report_date.split('-'))
         
+        submitted_by = f"{report['rank']} {report['first_name']} {report['last_name']}"
+        
         cursor.execute(
-            """INSERT INTO archived_daily_reports 
-               (id, year, month, report_date, department, submitted_by, timestamp, summary_data, report_data) 
+            """INSERT INTO archived_daily_reports
+               (id, year, month, report_date, department, submitted_by, timestamp, summary_data, report_data)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                report["id"], year, month, report_date, department,
-                report["submitted_by"], report["timestamp"],
+                str(uuid.uuid4()), year, month, report_date, department,
+                submitted_by, report["timestamp"],
                 json.dumps(report["summary_data"]), json.dumps(report["report_data"])
             )
         )
@@ -798,7 +843,41 @@ def handle_archive_daily_reports(payload, conn, cursor, session):
     conn.commit()
     return {"status": "success", "message": f"เก็บรายงานวันที่ {report_date_to_clear} และรีเซ็ตแดชบอร์ดสำเร็จ"}
 
-# --- END: NEW ACTION HANDLERS FOR DAILY SYSTEM ---
+def handle_get_archived_daily_reports(payload, conn, cursor, session):
+    cursor.execute("SELECT * FROM archived_daily_reports ORDER BY year DESC, month DESC, report_date DESC")
+    archives = defaultdict(lambda: defaultdict(list))
+    for row in cursor.fetchall():
+        report = dict(row)
+        report["summary_data"] = json.loads(report["summary_data"])
+        report["report_data"] = json.loads(report["report_data"])
+        archives[str(report["year"])][str(report["month"])].append(report)
+    return {"status": "success", "archives": dict(archives)}
+
+def handle_list_holidays(payload, conn, cursor, session):
+    cursor.execute("SELECT date, description FROM holidays ORDER BY date ASC")
+    holidays = [dict(row) for row in cursor.fetchall()]
+    return {"status": "success", "holidays": holidays}
+
+def handle_add_holiday(payload, conn, cursor, session):
+    holiday_date = payload.get("date")
+    description = payload.get("description")
+    if not holiday_date or not description:
+        return {"status": "error", "message": "กรุณากรอกข้อมูลวันหยุดให้ครบถ้วน"}
+    try:
+        cursor.execute("INSERT INTO holidays (date, description) VALUES (?, ?)", (holiday_date, description))
+        conn.commit()
+        return {"status": "success", "message": f"เพิ่มวันหยุด '{escape(description)}' สำเร็จ"}
+    except sqlite3.IntegrityError:
+        return {"status": "error", "message": "วันหยุดนี้มีอยู่ในระบบแล้ว"}
+
+def handle_delete_holiday(payload, conn, cursor, session):
+    holiday_date = payload.get("date")
+    if not holiday_date:
+        return {"status": "error", "message": "ไม่พบข้อมูลวันที่ที่จะลบ"}
+    cursor.execute("DELETE FROM holidays WHERE date = ?", (holiday_date,))
+    conn.commit()
+    return {"status": "success", "message": "ลบวันหยุดสำเร็จ"}
+# --- END: DAILY SYSTEM ACTION HANDLERS ---
 
 
 # --- HTTP Request Handler ---
@@ -833,6 +912,10 @@ class APIHandler(BaseHTTPRequestHandler):
         "get_daily_submission_history": {"handler": handle_get_daily_submission_history, "auth_required": True},
         "get_daily_final_report": {"handler": handle_get_daily_final_report, "auth_required": True, "admin_only": True},
         "archive_daily_reports": {"handler": handle_archive_daily_reports, "auth_required": True, "admin_only": True},
+        "get_archived_daily_reports": {"handler": handle_get_archived_daily_reports, "auth_required": True, "admin_only": True},
+        "list_holidays": {"handler": handle_list_holidays, "auth_required": True, "admin_only": True},
+        "add_holiday": {"handler": handle_add_holiday, "auth_required": True, "admin_only": True},
+        "delete_holiday": {"handler": handle_delete_holiday, "auth_required": True, "admin_only": True},
     }
 
     def _serve_static_file(self):
@@ -842,7 +925,7 @@ class APIHandler(BaseHTTPRequestHandler):
         path_map = {'/': '/login.html', '/main': '/main.html', '/daily': '/daily.html'}
         path = path_map.get(path, path)
         filepath = path.lstrip('/')
-        if not os.path.exists(filepath): 
+        if not os.path.exists(filepath):
             self.send_error(404, "File not found")
             return
         mimetypes = {'.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css'}
@@ -850,23 +933,23 @@ class APIHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', mimetype)
         self.end_headers()
-        with open(filepath, 'rb') as f: 
+        with open(filepath, 'rb') as f:
             self.wfile.write(f.read())
 
-    def do_GET(self): 
+    def do_GET(self):
         self._serve_static_file()
 
     def do_POST(self):
-        if self.path == "/api": 
+        if self.path == "/api":
             self._handle_api_request()
-        else: 
+        else:
             self.send_error(404, "Endpoint not found")
 
     def _send_json_response(self, data, status_code=200, headers=None):
         self.send_response(status_code)
         self.send_header('Content-type', 'application/json')
         if headers:
-            for key, value in headers: 
+            for key, value in headers:
                 self.send_header(key, value)
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
@@ -903,35 +986,37 @@ class APIHandler(BaseHTTPRequestHandler):
             request_data = json.loads(self.rfile.read(content_length).decode('utf-8'))
             action_name, payload = request_data.get("action"), request_data.get("payload", {})
             action_config = self.ACTION_MAP.get(action_name)
-            if not action_config: 
+            if not action_config:
                 return self._send_json_response({"status": "error", "message": "ไม่รู้จักคำสั่งนี้"}, 404)
-            if action_config.get("auth_required") and not session: 
+            if action_config.get("auth_required") and not session:
                 return self._send_json_response({"status": "error", "message": "Unauthorized"}, 401)
-            if action_config.get("admin_only") and (not session or session.get("role") != "admin"): 
+            if action_config.get("admin_only") and (not session or session.get("role") != "admin"):
                 return self._send_json_response({"status": "error", "message": "คุณไม่มีสิทธิ์ดำเนินการ"}, 403)
             
             conn = get_db_connection()
             cursor = conn.cursor()
             try:
                 handler_kwargs = {"payload": payload, "conn": conn, "cursor": cursor}
-                if action_name == "login": 
+                if action_name == "login":
                     handler_kwargs["client_address"] = self.client_address
                 # Updated session-requiring actions list
                 if session and action_name in [
-                    "logout", "list_personnel", "submit_status_report", 
+                    "logout", "list_personnel", "submit_status_report",
                     "get_submission_history", "get_active_statuses",
                     "get_daily_personnel_for_submission", "submit_daily_report",
                     "get_daily_dashboard_summary", "get_daily_submission_history",
-                    "get_daily_final_report", "archive_daily_reports"
+                    "get_daily_final_report", "archive_daily_reports",
+                    "get_archived_daily_reports",
+                    "list_holidays", "add_holiday", "delete_holiday" # Add new actions
                     ]:
                     handler_kwargs["session"] = session
 
                 response_data = action_config["handler"](**handler_kwargs)
                 headers = None
-                if isinstance(response_data, tuple): 
+                if isinstance(response_data, tuple):
                     response_data, headers = response_data
                 self._send_json_response(response_data, headers=headers)
-            finally: 
+            finally:
                 conn.close()
         except Exception as e:
             print(f"API Error on action '{action_name}': {e}")
@@ -945,4 +1030,3 @@ def run(server_class=HTTPServer, handler_class=APIHandler, port=9999):
 
 if __name__ == "__main__":
     run()
-

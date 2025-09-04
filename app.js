@@ -13,6 +13,7 @@ window.allArchivedReports = {};
 window.allHistoryData = {};
 window.personnelCurrentPage = 1;
 window.userCurrentPage = 1;
+window.holidayDatepicker = null; // To store the holiday datepicker instance
 
 // --- Auto Logout Feature ---
 let inactivityTimer;
@@ -84,6 +85,8 @@ window.showHistoryBtn = null;
 window.activeStatusesContainer = null;
 window.mainNav = null;
 window.mainTitle = null;
+window.holidayForm = null;
+window.holidayListContainer = null;
 
 // --- Main Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -153,6 +156,8 @@ function assignDomElements() {
     window.activeStatusesContainer = document.getElementById('active-statuses-container');
     window.mainNav = document.getElementById('main-nav');
     window.mainTitle = document.getElementById('main-title');
+    window.holidayForm = document.getElementById('holiday-form');
+    window.holidayListContainer = document.getElementById('holiday-list-container');
 }
 
 
@@ -176,19 +181,24 @@ function initializePage() {
         mainNav.classList.add('hidden');
         panes.forEach(pane => pane.classList.add('hidden'));
 
+        let targetPaneId, titleText;
         if (view === 'personnel') {
-            mainTitle.textContent = 'จัดการกำลังพล';
-            const targetPane = document.getElementById('pane-personnel');
-            if (targetPane) {
-                targetPane.classList.remove('hidden');
-                loadDataForPane('pane-personnel');
-            }
+            targetPaneId = 'pane-personnel';
+            titleText = 'จัดการกำลังพล';
         } else if (view === 'users') {
-            mainTitle.textContent = 'จัดการผู้ใช้';
-            const targetPane = document.getElementById('pane-admin');
+            targetPaneId = 'pane-admin';
+            titleText = 'จัดการผู้ใช้';
+        } else if (view === 'holidays') {
+            targetPaneId = 'pane-holidays';
+            titleText = 'จัดการวันหยุด';
+        }
+
+        if (targetPaneId) {
+            mainTitle.textContent = titleText;
+            const targetPane = document.getElementById(targetPaneId);
             if (targetPane) {
                 targetPane.classList.remove('hidden');
-                loadDataForPane('pane-admin');
+                loadDataForPane(targetPaneId);
             }
         }
     } else {
@@ -303,7 +313,7 @@ function initializePage() {
     if (statusSubmissionListArea) {
         statusSubmissionListArea.addEventListener('click', function(e) {
             if (e.target && e.target.classList.contains('add-status-btn')) {
-                ui.addStatusRow(e.target);
+                addStatusRow(e.target);
             }
             if (e.target && e.target.classList.contains('remove-status-btn')) {
                 const subRow = e.target.closest('tr');
@@ -312,6 +322,20 @@ function initializePage() {
                 }
             }
         });
+    }
+
+    // *** NEW: Holiday Management Event Listeners ***
+    if (holidayForm) {
+        window.holidayDatepicker = flatpickr("#holiday-date", {
+            locale: ui.thai_locale,
+            altInput: true,
+            altFormat: "j F Y",
+            dateFormat: "Y-m-d",
+        });
+        holidayForm.addEventListener('submit', handlers.handleAddHoliday);
+    }
+    if (holidayListContainer) {
+        holidayListContainer.addEventListener('click', handlers.handleDeleteHoliday);
     }
 }
 
@@ -331,7 +355,8 @@ window.loadDataForPane = async function(paneId) {
             window.allArchivedReports = archives || {};
             ui.populateArchiveSelectors(window.allArchivedReports);
             if(window.archiveContainer) window.archiveContainer.innerHTML = '';
-        }}
+        }},
+        'pane-holidays': { action: 'list_holidays', renderer: handlers.renderHolidays },
     };
 
     const paneConfig = actions[paneId];
@@ -388,4 +413,3 @@ window.switchTab = function(tabId) {
         }
     });
 }
-
