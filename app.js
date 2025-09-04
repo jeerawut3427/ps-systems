@@ -82,6 +82,8 @@ window.historyYearSelect = null;
 window.historyMonthSelect = null;
 window.showHistoryBtn = null;
 window.activeStatusesContainer = null;
+window.mainNav = null;
+window.mainTitle = null;
 
 // --- Main Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -149,13 +151,16 @@ function assignDomElements() {
     window.historyMonthSelect = document.getElementById('history-month-select');
     window.showHistoryBtn = document.getElementById('show-history-btn');
     window.activeStatusesContainer = document.getElementById('active-statuses-container');
+    window.mainNav = document.getElementById('main-nav');
+    window.mainTitle = document.getElementById('main-title');
 }
+
 
 function initializePage() {
     appContainer.classList.remove('hidden');
     const userRole = currentUser.role;
     welcomeMessage.textContent = `ล็อกอินในฐานะ: ${escapeHTML(currentUser.username)} (${escapeHTML(userRole)})`;
-const backToSelectionBtn = document.getElementById('back-to-selection-btn');
+    const backToSelectionBtn = document.getElementById('back-to-selection-btn');
     if (backToSelectionBtn) {
         backToSelectionBtn.addEventListener('click', () => {
             window.location.href = '/selection.html';
@@ -163,19 +168,45 @@ const backToSelectionBtn = document.getElementById('back-to-selection-btn');
     }
 
     const is_admin = (userRole === 'admin');
-    document.getElementById('tab-dashboard').classList.toggle('hidden', !is_admin);
-    document.getElementById('tab-active-statuses').classList.remove('hidden');
-    document.getElementById('tab-submit-status').classList.remove('hidden');
-    document.getElementById('tab-history').classList.remove('hidden');
-    document.getElementById('tab-report').classList.toggle('hidden', !is_admin);
-    document.getElementById('tab-archive').classList.toggle('hidden', !is_admin);
-    document.getElementById('tab-personnel').classList.toggle('hidden', !is_admin);
-    document.getElementById('tab-admin').classList.toggle('hidden', !is_admin);
+    
+    const urlParams = new URLSearchParams(window.location.search);
+    const view = urlParams.get('view');
 
-    if (is_admin) {
-        switchTab('tab-dashboard');
+    if (is_admin && view) {
+        mainNav.classList.add('hidden');
+        panes.forEach(pane => pane.classList.add('hidden'));
+
+        if (view === 'personnel') {
+            mainTitle.textContent = 'จัดการกำลังพล';
+            const targetPane = document.getElementById('pane-personnel');
+            if (targetPane) {
+                targetPane.classList.remove('hidden');
+                loadDataForPane('pane-personnel');
+            }
+        } else if (view === 'users') {
+            mainTitle.textContent = 'จัดการผู้ใช้';
+            const targetPane = document.getElementById('pane-admin');
+            if (targetPane) {
+                targetPane.classList.remove('hidden');
+                loadDataForPane('pane-admin');
+            }
+        }
     } else {
-        switchTab('tab-active-statuses');
+        mainNav.classList.remove('hidden');
+        mainTitle.textContent = 'ระบบรายงานยอดกำลังพลประจำสัปดาห์';
+        
+        document.getElementById('tab-dashboard').classList.toggle('hidden', !is_admin);
+        document.getElementById('tab-active-statuses').classList.remove('hidden');
+        document.getElementById('tab-submit-status').classList.remove('hidden');
+        document.getElementById('tab-history').classList.remove('hidden');
+        document.getElementById('tab-report').classList.toggle('hidden', !is_admin);
+        document.getElementById('tab-archive').classList.toggle('hidden', !is_admin);
+        
+        if (is_admin) {
+            switchTab('tab-dashboard');
+        } else {
+            switchTab('tab-active-statuses');
+        }
     }
 
     logoutBtn.addEventListener('click', () => performLogout());
@@ -304,7 +335,10 @@ window.loadDataForPane = async function(paneId) {
     };
 
     const paneConfig = actions[paneId];
-    if (!paneConfig) return;
+    if (!paneConfig) {
+        console.error("No config for pane:", paneId);
+        return;
+    };
 
     if (paneConfig.searchInput) {
         payload.searchTerm = paneConfig.searchInput.value;
@@ -316,7 +350,6 @@ window.loadDataForPane = async function(paneId) {
         payload.fetchAll = true;
     }
 
-    // [แก้ไข] ส่งชื่อแผนกที่ Admin เลือกไปกับ Request
     if (paneId === 'pane-submit-status' && window.currentUser.role === 'admin') {
         const deptSelector = document.getElementById('admin-dept-selector');
         if (deptSelector && deptSelector.value) {
@@ -355,3 +388,4 @@ window.switchTab = function(tabId) {
         }
     });
 }
+

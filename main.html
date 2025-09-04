@@ -22,18 +22,18 @@
         
         <article id="app-container" class="hidden bg-white p-8 rounded-xl shadow-lg">
             
-<header class="flex flex-wrap justify-between items-center mb-6 border-b pb-4 gap-4">
-    <div>
-        <h1 class="text-2xl font-bold text-gray-800">ระบบรายงานยอดกำลังพลประจำสัปดาห์</h1>
-        <p id="welcome-message" class="text-gray-600"></p>
-    </div>
-    <div class="flex space-x-2">
-        <button id="back-to-selection-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg">กลับสู่หน้าเลือกเมนู</button>
-        <button id="logout-btn" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">ออกจากระบบ</button>
-    </div>
-</header>
+            <header class="flex flex-wrap justify-between items-center mb-6 border-b pb-4 gap-4">
+                <div>
+                    <h1 id="main-title" class="text-2xl font-bold text-gray-800">ระบบรายงานยอดกำลังพลประจำสัปดาห์</h1>
+                    <p id="welcome-message" class="text-gray-600"></p>
+                </div>
+                <div class="flex space-x-2">
+                    <button id="back-to-selection-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg">กลับสู่หน้าเลือกเมนู</button>
+                    <button id="logout-btn" class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg">ออกจากระบบ</button>
+                </div>
+            </header>
             
-            <nav class="mb-4 border-b border-gray-200">
+            <nav id="main-nav" class="mb-4 border-b border-gray-200">
                 <div class="flex space-x-4 overflow-x-auto pb-2" aria-label="Tabs">
                     <button id="tab-dashboard" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">แดชบอร์ด</button>
                     <button id="tab-active-statuses" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">สถานะกำลังพล</button>
@@ -41,8 +41,6 @@
                     <button id="tab-history" class="tab-button whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">ประวัติการส่ง</button>
                     <button id="tab-report" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">ส่งรายงานประจำสัปดาห์</button>
                     <button id="tab-archive" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">รายงานทั้งหมด</button>
-                    <button id="tab-personnel" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">จัดการกำลังพล</button>
-                    <button id="tab-admin" class="tab-button hidden whitespace-nowrap py-2 px-4 text-sm font-medium text-gray-500 hover:text-blue-600 border-b-2 border-transparent">จัดการผู้ใช้</button>
                 </div>
             </nav>
             
@@ -188,7 +186,7 @@
                     <div id="archive-container"></div>
                 </section>
 
-                <!-- Personnel Management Pane -->
+                <!-- Personnel Management Pane (Stays in HTML but is hidden) -->
                 <section id="pane-personnel" class="tab-pane hidden">
                     <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
                         <h2 class="text-xl font-semibold">รายชื่อกำลังพล</h2>
@@ -206,7 +204,7 @@
                     <div id="personnel-pagination" class="mt-4 flex justify-between items-center"></div>
                 </section>
 
-                <!-- User Management Pane -->
+                <!-- User Management Pane (Stays in HTML but is hidden) -->
                 <section id="pane-admin" class="tab-pane hidden">
                      <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
                         <h2 class="text-xl font-semibold">รายชื่อผู้ใช้งานระบบ</h2>
@@ -256,3 +254,4 @@
     <script src="app.js" type="module" defer></script>
 </body>
 </html>
+

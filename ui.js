@@ -6,7 +6,7 @@ import { escapeHTML, formatThaiDateArabic, formatThaiDateRangeArabic } from './u
 const ITEMS_PER_PAGE = 15;
 
 // --- Thai locale settings for Flatpickr ---
-const thai_locale = {
+export const thai_locale = {
     weekdays: {
         shorthand: ["อา", "จ", "อ", "พ", "พฤ", "ศ", "ส"],
         longhand: ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"],
@@ -30,6 +30,7 @@ const STATUS_COLORS = {
     'ศึกษา': 'bg-purple-50',
     'ลากิจ': 'bg-red-50',
     'ลาพักผ่อน': 'bg-green-50',
+    'ลาป่วย': 'bg-yellow-50', // Added for daily
 };
 
 // --- Color settings for the chart ---
@@ -207,10 +208,8 @@ export function renderPersonnel(res) {
     window.personnelListArea.innerHTML = '';
     
     if (!personnel || personnel.length === 0) {
-        const tableContainer = window.personnelListArea.closest('.overflow-x-auto');
-        if (tableContainer) {
-            tableContainer.innerHTML = createEmptyState('ไม่พบข้อมูลกำลังพลในระบบ');
-        }
+        const emptyRow = `<tr><td colspan="8">${createEmptyState('ไม่พบข้อมูลกำลังพลที่ตรงกับคำค้นหา')}</td></tr>`;
+        window.personnelListArea.innerHTML = emptyRow;
         document.getElementById('personnel-pagination').innerHTML = '';
         return;
     }
@@ -244,10 +243,8 @@ export function renderUsers(res) {
     window.userListArea.innerHTML = '';
     
     if (!users || users.length === 0) {
-        const tableContainer = window.userListArea.closest('.overflow-x-auto');
-        if (tableContainer) {
-            tableContainer.innerHTML = createEmptyState('ไม่พบข้อมูลผู้ใช้งานในระบบ');
-        }
+        const emptyRow = `<tr><td colspan="6">${createEmptyState('ไม่พบข้อมูลผู้ใช้ที่ตรงกับคำค้นหา')}</td></tr>`;
+        window.userListArea.innerHTML = emptyRow;
         document.getElementById('user-pagination').innerHTML = '';
         return;
     }
@@ -989,3 +986,4 @@ export function renderActiveStatuses(res) {
     // Render the initial view with 'ทั้งหมด' filter
     updateActiveStatusesView('ทั้งหมด');
 }
+

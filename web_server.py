@@ -14,6 +14,7 @@ from collections import defaultdict
 import time
 import re
 from email.utils import formatdate
+from urllib.parse import urlparse
 
 # --- Database Setup ---
 DB_FILE = "database.db"
@@ -34,53 +35,46 @@ RANK_ORDER = [
     'จ.ต.', 'จ.ต.หญิง', 'นาย', 'นาง', 'นางสาว'
 ]
 
-# --- Helper Functions ---
-def get_thai_public_holidays(year):
-    holidays = {
-        date(year, 1, 1), date(year, 2, 26), date(year, 4, 7), date(year, 4, 14), date(year, 4, 15),
-        date(year, 4, 16), date(year, 5, 1), date(year, 5, 5), date(year, 5, 26), date(year, 6, 3),
-        date(year, 7, 25), date(year, 7, 28), date(year, 8, 12), date(year, 10, 13), date(year, 10, 23),
-        date(year, 12, 5), date(year, 12, 10), date(year, 12, 31),
-    }
-    return holidays
+# --- START: NEW CONFIGURATION FOR DAILY SYSTEM ---
+# Dictionary to classify ranks into personnel types
+RANK_CLASSIFICATION = {
+    'officer': ['น.อ.(พ)', 'น.อ.หม่อมหลวง', 'น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.', 
+                'น.อ.(พ).หญิง', 'น.อ.หญิง', 'น.ท.หญิง', 'น.ต.หญิง', 'ร.อ.หญิง', 'ร.ท.หญิง', 'ร.ต.หญิง'],
+    'nco': ['พ.อ.อ.(พ)', 'พ.อ.อ.', 'พ.อ.ท.', 'พ.อ.ต.', 'จ.อ.', 'จ.ท.', 'จ.ต.',
+            'พ.อ.อ.หญิง', 'พ.อ.ท.หญิง', 'พ.อ.ต.หญิง', 'จ.อ.หญิง', 'จ.ท.หญิง', 'จ.ต.หญิง'],
+    'civilian': ['นาย', 'นาง', 'นางสาว']
+}
+# --- END: NEW CONFIGURATION FOR DAILY SYSTEM ---
 
+
+# --- Helper Functions ---
 def get_next_week_range_str():
+    """
+    Calculates the full 7-day date range (Monday to Sunday) for the upcoming week.
+    ปรับปรุง: คำนวณห้วงเวลาของสัปดาห์หน้าแบบเต็ม 7 วัน (จันทร์-อาทิตย์)
+    """
     today = date.today()
-    all_holidays = get_thai_public_holidays(today.year).union(get_thai_public_holidays(today.year + 1))
-    working_days = []
-    current_day = today - timedelta(days=today.weekday()) + timedelta(weeks=1)
-    while len(working_days) < 5:
-        if current_day.weekday() < 5 and current_day not in all_holidays:
-            working_days.append(current_day)
-        current_day += timedelta(days=1)
-    if not working_days: return ""
+    start_of_next_week = today + timedelta(days=-today.weekday(), weeks=1)
+    end_of_next_week = start_of_next_week + timedelta(days=6)
     
     thai_months_abbr = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."]
-    groups, parts = [], []
-    if working_days:
-        current_group = [working_days[0]]
-        for i in range(1, len(working_days)):
-            if working_days[i] == working_days[i-1] + timedelta(days=1):
-                current_group.append(working_days[i])
-            else:
-                groups.append(current_group)
-                current_group = [working_days[i]]
-        groups.append(current_group)
 
-    for group in groups:
-        start_date, end_date = group[0], group[-1]
-        start_day, start_month, start_year = start_date.day, thai_months_abbr[start_date.month - 1], str(start_date.year + 543)
-        end_day, end_month, end_year = end_date.day, thai_months_abbr[end_date.month - 1], str(end_date.year + 543)
-        if len(group) == 1: 
-            parts.append(f"{start_day} {start_month} {start_year}")
-        else:
-            if start_year != end_year: 
-                parts.append(f"{start_day} {start_month} {start_year} - {end_day} {end_month} {end_year}")
-            elif start_month != end_month: 
-                parts.append(f"{start_day} {start_month} - {end_day} {end_month} {end_year}")
-            else: 
-                parts.append(f"{start_day}-{end_day} {start_month} {end_year}")
-    return " และ ".join(parts)
+    start_day = start_of_next_week.day
+    start_month = thai_months_abbr[start_of_next_week.month - 1]
+    start_year_be = str(start_of_next_week.year + 543)
+    
+    end_day = end_of_next_week.day
+    end_month = thai_months_abbr[end_of_next_week.month - 1]
+    end_year_be = str(end_of_next_week.year + 543)
+
+    if start_year_be != end_year_be:
+        return f"{start_day} {start_month} {start_year_be} - {end_day} {end_month} {end_year_be}"
+    
+    if start_month != end_month:
+        return f"{start_day} {start_month} - {end_day} {end_month} {end_year_be}"
+        
+    return f"{start_day} - {end_day} {end_month} {end_year_be}"
+
 
 # --- Database Functions ---
 def get_db_connection():
@@ -110,6 +104,20 @@ def init_db():
         )
     ''')
 
+    # --- START: CREATE NEW daily_reports TABLE ---
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS daily_reports (
+            id TEXT PRIMARY KEY,
+            report_date TEXT NOT NULL,
+            department TEXT NOT NULL,
+            submitted_by TEXT NOT NULL,
+            timestamp DATETIME,
+            summary_data TEXT,
+            report_data TEXT
+        )
+    ''')
+    # --- END: CREATE NEW daily_reports TABLE ---
+
     cursor.execute("SELECT * FROM users WHERE username = ?", ('jeerawut',))
     if not cursor.fetchone():
         print("กำลังสร้างผู้ดูแลระบบ 'jeerawut'...")
@@ -135,6 +143,26 @@ def is_password_complex(password):
     if not re.search("[A-Z]", password): return False
     if not re.search("[0-9]", password): return False
     return True
+
+# --- START: NEW HELPER FUNCTION ---
+def classify_personnel(personnel_list):
+    """Classifies a list of personnel into three categories based on their rank."""
+    classified = {
+        'officer': [],
+        'nco': [],
+        'civilian': []
+    }
+    for p in personnel_list:
+        person_rank = p.get('rank')
+        if person_rank in RANK_CLASSIFICATION['officer']:
+            classified['officer'].append(p)
+        elif person_rank in RANK_CLASSIFICATION['nco']:
+            classified['nco'].append(p)
+        elif person_rank in RANK_CLASSIFICATION['civilian']:
+            classified['civilian'].append(p)
+    return classified
+# --- END: NEW HELPER FUNCTION ---
+
 
 # --- Action Handlers ---
 def handle_login(payload, conn, cursor, client_address):
@@ -263,6 +291,14 @@ def handle_list_personnel(payload, conn, cursor, session):
     if search_term:
         where_clauses.append("(first_name LIKE ? OR last_name LIKE ? OR position LIKE ?)")
         params.extend([f"%{search_term}%"] * 3)
+        
+    # แก้ไข: กรองให้แสดงเฉพาะนายทหารสัญญาบัตรในหน้าส่งยอดประจำสัปดาห์
+    if fetch_all:
+        officer_ranks = RANK_CLASSIFICATION['officer']
+        placeholders = ', '.join('?' for _ in officer_ranks)
+        where_clauses.append(f"rank IN ({placeholders})")
+        params.extend(officer_ranks)
+
     where_clause_str = ""
     if where_clauses: where_clause_str = " WHERE " + " AND ".join(where_clauses)
     
@@ -274,6 +310,7 @@ def handle_list_personnel(payload, conn, cursor, session):
     if not fetch_all:
         data_query += " LIMIT ? OFFSET ?"
         params.extend([ITEMS_PER_PAGE, offset])
+    
     cursor.execute(data_query, params)
     personnel = [{k: escape(str(v)) if v is not None else '' for k, v in dict(row).items()} for row in cursor.fetchall()]
     
@@ -285,13 +322,22 @@ def handle_list_personnel(payload, conn, cursor, session):
 
     persistent_statuses = []
     if fetch_all:
-        today_str = date.today().isoformat()
+        today = date.today()
+        end_of_current_week = today + timedelta(days=6 - today.weekday())
+        end_of_current_week_str = end_of_current_week.isoformat()
+
+        dept_to_query = department
         if is_admin:
-            query = "SELECT personnel_id, department, status, details, start_date, end_date FROM persistent_statuses WHERE end_date >= ?"
-            params_status = [today_str]
-        else:
-            query = "SELECT personnel_id, department, status, details, start_date, end_date FROM persistent_statuses WHERE end_date >= ? AND department = ?"
-            params_status = [today_str, department]
+            # If admin is loading this page, they might be viewing a specific dept
+            # This part might need refinement if admins can select depts on this page
+            # For now, let's assume it queries for all if no specific dept is in context
+             pass
+
+        query = "SELECT personnel_id, department, status, details, start_date, end_date FROM persistent_statuses WHERE end_date > ?"
+        params_status = [end_of_current_week_str]
+        if not is_admin:
+            query += " AND department = ?"
+            params_status.append(department)
         
         cursor.execute(query, params_status)
         persistent_statuses = [dict(row) for row in cursor.fetchall()]
@@ -472,7 +518,6 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     is_admin = session.get("role") == "admin"
     department = session.get("department")
 
-    # Get unavailable personnel (active statuses)
     query_unavailable = """
         SELECT 
             ps.status, ps.details, ps.start_date, ps.end_date, ps.personnel_id,
@@ -490,7 +535,6 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     unavailable_personnel = [dict(row) for row in cursor.fetchall()]
     unavailable_ids = {p['personnel_id'] for p in unavailable_personnel}
 
-    # Get all personnel in scope
     query_all = "SELECT id, rank, first_name, last_name, department FROM personnel"
     params_all = []
     if not is_admin:
@@ -500,10 +544,8 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     cursor.execute(query_all, params_all)
     all_personnel = [dict(row) for row in cursor.fetchall()]
 
-    # Filter to find available personnel
     available_personnel = [p for p in all_personnel if p['id'] not in unavailable_ids]
 
-    # Sort both lists by rank
     def get_rank_index(item):
         try:
             return RANK_ORDER.index(item['rank'])
@@ -522,10 +564,173 @@ def handle_get_active_statuses(payload, conn, cursor, session):
         "total_personnel": total_personnel_in_scope
     }
 
+# --- START: NEW ACTION HANDLERS FOR DAILY SYSTEM ---
+def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
+    """Fetches a summary of daily report submissions for all departments for the next logical day."""
+    today = date.today()
+    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ?", (today.strftime('%Y-%m-%d'),))
+    if cursor.fetchone():
+        target_date = today + timedelta(days=1)
+    else:
+        target_date = today
+    target_date_str = target_date.strftime('%Y-%m-%d')
+    
+    cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != ''")
+    all_departments = [row['department'] for row in cursor.fetchall()]
+
+    query = """
+        SELECT 
+            dr.department, dr.summary_data, dr.timestamp, 
+            u.rank, u.first_name, u.last_name 
+        FROM daily_reports dr 
+        JOIN users u ON dr.submitted_by = u.username 
+        WHERE dr.report_date = ?
+    """
+    cursor.execute(query, (target_date_str,))
+    
+    submitted_info = {}
+    for row in cursor.fetchall():
+        submitter_fullname = f"{row['rank']} {row['first_name']} {row['last_name']}"
+        summary = json.loads(row['summary_data'])
+        submitted_info[row['department']] = {
+            'submitter_fullname': submitter_fullname, 
+            'timestamp': row['timestamp'], 
+            'summary': {
+                'officer': summary.get('officer', {}),
+                'nco': summary.get('nco', {}),
+                'civilian': summary.get('civilian', {})
+            }
+        }
+
+    return {"status": "success", "summary": {"all_departments": all_departments, "submitted_info": submitted_info, "report_date": target_date_str}}
+
+def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
+    is_admin = session.get("role") == "admin"
+    all_departments = []
+    
+    if is_admin:
+        cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != '' ORDER BY department")
+        all_departments = [row['department'] for row in cursor.fetchall()]
+
+    department = (payload.get("department") or (all_departments[0] if all_departments else None)) if is_admin else session.get("department")
+
+    if not department:
+        response_data = {"status": "success", "personnel": {'officer':[], 'nco':[], 'civilian':[]}, "department": "", "report_date": date.today().isoformat()}
+        if is_admin: response_data["all_departments"] = all_departments
+        return response_data
+
+    today = date.today()
+    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ? AND department = ?", (today.strftime('%Y-%m-%d'), department))
+    target_date = today + timedelta(days=1) if cursor.fetchone() else today
+    target_date_str = target_date.isoformat()
+
+    cursor.execute("SELECT * FROM personnel WHERE department = ?", (department,))
+    personnel_in_dept = [dict(row) for row in cursor.fetchall()]
+    classified_personnel = classify_personnel(personnel_in_dept)
+    
+    cursor.execute("SELECT * FROM persistent_statuses WHERE end_date >= ? AND start_date <= ? AND department = ?", 
+                   (target_date_str, target_date_str, department))
+    active_statuses = {row['personnel_id']: dict(row) for row in cursor.fetchall()}
+
+    for category in classified_personnel:
+        for person in classified_personnel[category]:
+            if person['id'] in active_statuses:
+                person['status'] = active_statuses[person['id']]['status']
+                person['details'] = active_statuses[person['id']]['details']
+                person['start_date'] = active_statuses[person['id']]['start_date']
+                person['end_date'] = active_statuses[person['id']]['end_date']
+            else:
+                person['status'] = 'ไม่มี'
+                person['details'] = ''
+                person['start_date'] = ''
+                person['end_date'] = ''
+                
+    response_data = {"status": "success", "personnel": classified_personnel, "department": department, "report_date": target_date_str}
+    if is_admin: response_data["all_departments"] = all_departments
+        
+    return response_data
+
+def handle_submit_daily_report(payload, conn, cursor, session):
+    data = payload.get("data", {})
+    submitted_by = session.get("username")
+    department = data.get("department")
+    report_date_str = data.get("report_date")
+    
+    if not all([department, report_date_str]):
+        return {"status": "error", "message": "ข้อมูลไม่ครบถ้วน"}
+
+    server_now = datetime.utcnow() + timedelta(hours=7)
+    timestamp_str = server_now.strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute("DELETE FROM daily_reports WHERE department = ? AND report_date = ?", (department, report_date_str))
+    cursor.execute(
+        "INSERT INTO daily_reports (id, report_date, department, submitted_by, timestamp, summary_data, report_data) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), report_date_str, department, submitted_by, timestamp_str, json.dumps(data.get("summary_data", {})), json.dumps(data.get("report_data", {})))
+    )
+
+    # --- START: Update persistent_statuses for NCOs and Civilians ---
+    cursor.execute("SELECT id, rank FROM personnel WHERE department = ?", (department,))
+    personnel_in_dept = cursor.fetchall()
+    
+    nco_civ_ids = [
+        p['id'] for p in personnel_in_dept 
+        if p['rank'] in RANK_CLASSIFICATION['nco'] or p['rank'] in RANK_CLASSIFICATION['civilian']
+    ]
+
+    if nco_civ_ids:
+        placeholders = ', '.join('?' for _ in nco_civ_ids)
+        cursor.execute(f"DELETE FROM persistent_statuses WHERE department = ? AND personnel_id IN ({placeholders})", [department] + nco_civ_ids)
+
+    report_data = data.get("report_data", {})
+    for category_key in ['nco', 'civilian']:
+        for item in report_data.get(category_key, []):
+            if item.get("status") != 'ไม่มี' and item.get("end_date", "") >= report_date_str:
+                cursor.execute(
+                    "INSERT INTO persistent_statuses (id, personnel_id, department, status, details, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (str(uuid.uuid4()), item["personnel_id"], department, item["status"], item["details"], item["start_date"], item["end_date"])
+                )
+    # --- END: Update persistent_statuses ---
+
+    conn.commit()
+    return {"status": "success", "message": f"ส่งยอดกำลังพลสำหรับวันที่ {report_date_str} สำเร็จ"}
+
+
+def handle_get_daily_submission_history(payload, conn, cursor, session):
+    is_admin = session.get("role") == "admin"
+    department = session.get("department")
+    
+    query = "SELECT report_date, department, submitted_by, timestamp, summary_data FROM daily_reports"
+    params = []
+    
+    if not is_admin:
+        query += " WHERE department = ?"
+        params.append(department)
+    
+    query += " ORDER BY report_date DESC"
+    cursor.execute(query, params)
+    
+    history_by_month = defaultdict(lambda: defaultdict(list))
+    
+    for row in cursor.fetchall():
+        report = dict(row)
+        report_dt = datetime.strptime(report["report_date"], '%Y-%m-%d')
+        year_be = str(report_dt.year + 543)
+        month = str(report_dt.month)
+        
+        report['summary'] = json.loads(report.get("summary_data", "{}"))
+        del report["summary_data"]
+        
+        history_by_month[year_be][month].append(report)
+        
+    return {"status": "success", "history": dict(history_by_month)}
+
+# --- END: NEW ACTION HANDLERS FOR DAILY SYSTEM ---
+
 
 # --- HTTP Request Handler ---
 class APIHandler(BaseHTTPRequestHandler):
     ACTION_MAP = {
+        # Weekly System Actions
         "login": {"handler": handle_login, "auth_required": False},
         "logout": {"handler": handle_logout, "auth_required": True},
         "get_dashboard_summary": {"handler": handle_get_dashboard_summary, "auth_required": True, "admin_only": True},
@@ -546,11 +751,22 @@ class APIHandler(BaseHTTPRequestHandler):
         "get_submission_history": {"handler": handle_get_submission_history, "auth_required": True},
         "get_report_for_editing": {"handler": handle_get_report_for_editing, "auth_required": True},
         "get_active_statuses": {"handler": handle_get_active_statuses, "auth_required": True},
+
+        # --- START: NEW ACTIONS FOR DAILY SYSTEM ---
+        "get_daily_dashboard_summary": {"handler": handle_get_daily_dashboard_summary, "auth_required": True, "admin_only": True},
+        "get_daily_personnel_for_submission": {"handler": handle_get_daily_personnel_for_submission, "auth_required": True},
+        "submit_daily_report": {"handler": handle_submit_daily_report, "auth_required": True},
+        "get_daily_submission_history": {"handler": handle_get_daily_submission_history, "auth_required": True},
+        # --- END: NEW ACTIONS FOR DAILY SYSTEM ---
     }
 
     def _serve_static_file(self):
-        path_map = {'/': '/login.html', '/main': '/main.html'}
-        path = path_map.get(self.path, self.path)
+        # แก้ไข: แยก query string ออกจาก path เพื่อให้รองรับ URL parameters
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+        
+        path_map = {'/': '/login.html', '/main': '/main.html', '/daily': '/daily.html'}
+        path = path_map.get(path, path)
         filepath = path.lstrip('/')
         if not os.path.exists(filepath): 
             self.send_error(404, "File not found")
@@ -626,7 +842,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 handler_kwargs = {"payload": payload, "conn": conn, "cursor": cursor}
                 if action_name == "login": 
                     handler_kwargs["client_address"] = self.client_address
-                if session and action_name in ["logout", "list_personnel", "submit_status_report", "get_submission_history", "get_active_statuses"]:
+                # Updated session-requiring actions list
+                if session and action_name in [
+                    "logout", "list_personnel", "submit_status_report", 
+                    "get_submission_history", "get_active_statuses",
+                    "get_daily_personnel_for_submission", "submit_daily_report",
+                    "get_daily_dashboard_summary", "get_daily_submission_history"
+                    ]:
                     handler_kwargs["session"] = session
 
                 response_data = action_config["handler"](**handler_kwargs)
@@ -648,3 +870,4 @@ def run(server_class=HTTPServer, handler_class=APIHandler, port=9999):
 
 if __name__ == "__main__":
     run()
+
