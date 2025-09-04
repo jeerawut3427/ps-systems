@@ -104,7 +104,6 @@ def init_db():
         )
     ''')
 
-    # --- START: CREATE NEW daily_reports TABLE ---
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_reports (
             id TEXT PRIMARY KEY,
@@ -116,7 +115,20 @@ def init_db():
             report_data TEXT
         )
     ''')
-    # --- END: CREATE NEW daily_reports TABLE ---
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS archived_daily_reports (
+            id TEXT PRIMARY KEY,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            report_date TEXT NOT NULL,
+            department TEXT NOT NULL,
+            submitted_by TEXT NOT NULL,
+            timestamp DATETIME,
+            summary_data TEXT,
+            report_data TEXT
+        )
+    ''')
 
     cursor.execute("SELECT * FROM users WHERE username = ?", ('jeerawut',))
     if not cursor.fetchone():
@@ -321,17 +333,17 @@ def handle_list_personnel(payload, conn, cursor, session):
         if last_submission: submission_status = {"timestamp": last_submission['timestamp']}
 
     persistent_statuses = []
+    all_departments = [] # เพิ่ม: สำหรับส่งให้ Admin dropdown
     if fetch_all:
         today = date.today()
         end_of_current_week = today + timedelta(days=6 - today.weekday())
         end_of_current_week_str = end_of_current_week.isoformat()
 
         dept_to_query = department
+        
         if is_admin:
-            # If admin is loading this page, they might be viewing a specific dept
-            # This part might need refinement if admins can select depts on this page
-            # For now, let's assume it queries for all if no specific dept is in context
-             pass
+            cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != '' ORDER BY department")
+            all_departments = [row['department'] for row in cursor.fetchall()]
 
         query = "SELECT personnel_id, department, status, details, start_date, end_date FROM persistent_statuses WHERE end_date > ?"
         params_status = [end_of_current_week_str]
@@ -342,7 +354,7 @@ def handle_list_personnel(payload, conn, cursor, session):
         cursor.execute(query, params_status)
         persistent_statuses = [dict(row) for row in cursor.fetchall()]
 
-    return {
+    response_data = {
         "status": "success", 
         "personnel": personnel, 
         "total": total_items, 
@@ -351,6 +363,10 @@ def handle_list_personnel(payload, conn, cursor, session):
         "weekly_date_range": get_next_week_range_str(),
         "persistent_statuses": persistent_statuses
     }
+    if is_admin and fetch_all:
+        response_data["all_departments"] = all_departments
+        
+    return response_data
 
 
 def handle_get_personnel_details(payload, conn, cursor):
@@ -724,6 +740,64 @@ def handle_get_daily_submission_history(payload, conn, cursor, session):
         
     return {"status": "success", "history": dict(history_by_month)}
 
+def handle_get_daily_final_report(payload, conn, cursor, session):
+    today = date.today()
+    cursor.execute("SELECT id FROM daily_reports WHERE report_date = ?", (today.strftime('%Y-%m-%d'),))
+    target_date = today + timedelta(days=1) if cursor.fetchone() else today
+    target_date_str = target_date.strftime('%Y-%m-%d')
+
+    cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != '' ORDER BY department")
+    all_departments = [row['department'] for row in cursor.fetchall()]
+    
+    query = """
+        SELECT dr.*, u.rank, u.first_name, u.last_name 
+        FROM daily_reports dr JOIN users u ON dr.submitted_by = u.username 
+        WHERE dr.report_date = ?
+    """
+    cursor.execute(query, (target_date_str,))
+    reports = [dict(row) for row in cursor.fetchall()]
+
+    for report in reports:
+        report['summary_data'] = json.loads(report['summary_data'])
+        report['report_data'] = json.loads(report['report_data'])
+
+    submitted_departments = [r['department'] for r in reports]
+    
+    return {
+        "status": "success", 
+        "reports": reports, 
+        "report_date": target_date_str,
+        "all_departments": all_departments,
+        "submitted_departments": submitted_departments
+    }
+    
+def handle_archive_daily_reports(payload, conn, cursor, session):
+    reports_to_archive = payload.get("reports", [])
+    if not reports_to_archive:
+        return {"status": "error", "message": "ไม่พบรายงานที่จะเก็บ"}
+
+    for report in reports_to_archive:
+        report_date = report["report_date"]
+        department = report["department"]
+        cursor.execute("DELETE FROM archived_daily_reports WHERE report_date = ? AND department = ?", (report_date, department))
+        year, month, _ = map(int, report_date.split('-'))
+        
+        cursor.execute(
+            """INSERT INTO archived_daily_reports 
+               (id, year, month, report_date, department, submitted_by, timestamp, summary_data, report_data) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                report["id"], year, month, report_date, department,
+                report["submitted_by"], report["timestamp"],
+                json.dumps(report["summary_data"]), json.dumps(report["report_data"])
+            )
+        )
+    
+    report_date_to_clear = reports_to_archive[0]["report_date"]
+    cursor.execute("DELETE FROM daily_reports WHERE report_date = ?", (report_date_to_clear,))
+    conn.commit()
+    return {"status": "success", "message": f"เก็บรายงานวันที่ {report_date_to_clear} และรีเซ็ตแดชบอร์ดสำเร็จ"}
+
 # --- END: NEW ACTION HANDLERS FOR DAILY SYSTEM ---
 
 
@@ -752,16 +826,16 @@ class APIHandler(BaseHTTPRequestHandler):
         "get_report_for_editing": {"handler": handle_get_report_for_editing, "auth_required": True},
         "get_active_statuses": {"handler": handle_get_active_statuses, "auth_required": True},
 
-        # --- START: NEW ACTIONS FOR DAILY SYSTEM ---
+        # Daily System Actions
         "get_daily_dashboard_summary": {"handler": handle_get_daily_dashboard_summary, "auth_required": True, "admin_only": True},
         "get_daily_personnel_for_submission": {"handler": handle_get_daily_personnel_for_submission, "auth_required": True},
         "submit_daily_report": {"handler": handle_submit_daily_report, "auth_required": True},
         "get_daily_submission_history": {"handler": handle_get_daily_submission_history, "auth_required": True},
-        # --- END: NEW ACTIONS FOR DAILY SYSTEM ---
+        "get_daily_final_report": {"handler": handle_get_daily_final_report, "auth_required": True, "admin_only": True},
+        "archive_daily_reports": {"handler": handle_archive_daily_reports, "auth_required": True, "admin_only": True},
     }
 
     def _serve_static_file(self):
-        # แก้ไข: แยก query string ออกจาก path เพื่อให้รองรับ URL parameters
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         
@@ -847,7 +921,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     "logout", "list_personnel", "submit_status_report", 
                     "get_submission_history", "get_active_statuses",
                     "get_daily_personnel_for_submission", "submit_daily_report",
-                    "get_daily_dashboard_summary", "get_daily_submission_history"
+                    "get_daily_dashboard_summary", "get_daily_submission_history",
+                    "get_daily_final_report", "archive_daily_reports"
                     ]:
                     handler_kwargs["session"] = session
 

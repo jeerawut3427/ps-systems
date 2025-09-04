@@ -30,7 +30,7 @@ const STATUS_COLORS = {
     'ศึกษา': 'bg-purple-50',
     'ลากิจ': 'bg-red-50',
     'ลาพักผ่อน': 'bg-green-50',
-    'ลาป่วย': 'bg-yellow-50', // Added for daily
+    'ลาป่วย': 'bg-yellow-50',
 };
 
 // --- Color settings for the chart ---
@@ -272,10 +272,7 @@ export function renderUsers(res) {
 }
 
 export function renderStatusSubmissionForm(res) {
-    const personnel = res.personnel;
-    const submissionStatus = res.submission_status;
-    const weekly_date_range = res.weekly_date_range;
-    const persistent_statuses = res.persistent_statuses || [];
+    const { personnel, submission_status, weekly_date_range, persistent_statuses = [], all_departments = [] } = res;
 
     const selectorContainer = document.getElementById('admin-dept-selector-container');
     const bulkButtonContainer = document.getElementById('bulk-status-buttons');
@@ -439,7 +436,6 @@ export function renderStatusSubmissionForm(res) {
 
     if (window.currentUser.role === 'admin') {
         selectorContainer.innerHTML = '';
-        const uniqueDepts = [...new Set(personnel.map(p => p.department))];
         const label = document.createElement('label');
         label.htmlFor = 'admin-dept-selector';
         label.className = 'block text-sm font-medium text-gray-700 mb-1';
@@ -448,9 +444,9 @@ export function renderStatusSubmissionForm(res) {
         selector.id = 'admin-dept-selector';
         selector.className = 'w-full md:w-1/3 border rounded px-2 py-2 bg-white shadow-sm';
         
-        let currentDept = window.editingReportData ? window.editingReportData.department : (uniqueDepts.length > 0 ? uniqueDepts[0] : '');
+        let currentDept = window.editingReportData ? window.editingReportData.department : (all_departments.length > 0 ? all_departments[0] : '');
 
-        uniqueDepts.forEach(dept => {
+        all_departments.forEach(dept => {
             const option = document.createElement('option');
             option.value = dept;
             option.textContent = dept;
@@ -655,7 +651,7 @@ export function renderFilteredHistoryReports(reports) {
         reportWrapper.innerHTML = `
             <div class="flex flex-wrap justify-between items-center mb-3 gap-2">
                 <div>
-                    <h4 class="text-lg font-semibold text-gray-700">รายงานวันที่ ${formatThaiDateArabic(report.date)}</h4>
+                    <h4 class="text-lg font-semibold text-gray-800">รายงานวันที่ ${formatThaiDateArabic(report.date)}</h4>
                     <span class="text-sm text-gray-500">ส่งเมื่อ: ${new Date(report.timestamp).toLocaleString('th-TH')}</span>
                 </div>
                 ${editButtonHtml}

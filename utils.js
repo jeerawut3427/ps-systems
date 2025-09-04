@@ -132,7 +132,7 @@ export function exportSingleReportToExcel(reports, fileName, weekRangeText) {
         
         let combinedDetails = item.status;
         if (item.details) {
-            combinedDetails += ` ${toThaiNumerals(item.details)}`; // Convert numbers in details to Thai numerals
+            combinedDetails += ` ${item.details}`; 
         }
         combinedDetails += ` (${dateRange})`;
 
