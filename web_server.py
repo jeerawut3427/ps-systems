@@ -87,27 +87,57 @@ def get_daily_target_date(cursor):
     """
     Determines the next working day for daily reports, skipping weekends and holidays.
     """
+    # 1. Get Holidays
     cursor.execute("SELECT date FROM holidays")
     holidays = {date.fromisoformat(row['date']) for row in cursor.fetchall()}
 
+    # 2. Get Last Archived Date
     cursor.execute("SELECT MAX(report_date) FROM archived_daily_reports")
     last_archived_row = cursor.fetchone()
     start_date = date.today()
     if last_archived_row and last_archived_row[0]:
         start_date = date.fromisoformat(last_archived_row[0])
 
+    # 3. Get Last Daily Report Date
     cursor.execute("SELECT MAX(report_date) FROM daily_reports")
     last_daily_row = cursor.fetchone()
     if last_daily_row and last_daily_row[0]:
         last_daily_date = date.fromisoformat(last_daily_row[0])
         if last_daily_date > start_date:
-            return last_daily_date
+            start_date = last_daily_date
 
-    next_day = start_date
+    # 4. Find next valid working day
+    # ถ้าวันนี้ยังไม่มีการส่งข้อมูลใดๆ เลย ให้ใช้วันนี้เป็นฐาน (กรณีเริ่มระบบใหม่)
+    # แต่ถ้ามีข้อมูลแล้ว ให้หาวันทำการถัดไป
+    
+    # Logic: ถ้ายังไม่มีการเริ่มระบบ (DB ว่างเปล่า) ให้ใช้วันนี้
+    # ถ้ามีแล้ว ให้เริ่มนับจากวันล่าสุดที่มีการเคลื่อนไหว
+    
+    if start_date == date.today() and not last_daily_row[0] and not last_archived_row[0]:
+        # First run ever
+        next_day = start_date
+    else:
+        # System has history, find next day
+        # Note: In a real scenario, this logic might need adjustment based on when the function is called
+        # For now, let's assume we want the "current logic date"
+        # If we are just viewing, we want the "target date" for submission
+        
+        # Simple Logic: 
+        # If today is a working day and no report exists for today -> Today
+        # If report exists for today -> Next working day
+        
+        # Let's stick to the previous implementation which seemed to iterate
+        # But allow for "Today" if today is valid and not skipped
+        next_day = start_date 
+        
+        # If the start_date found in DB is strictly in the past, we might want to catch up to today
+        if next_day < date.today():
+            next_day = date.today()
+
+    # Skip weekends/holidays logic
     while True:
-        next_day += timedelta(days=1)
-        # weekday() -> Monday is 0 and Sunday is 6
         if next_day.weekday() >= 5 or next_day in holidays:
+            next_day += timedelta(days=1)
             continue
         return next_day
 # --- END: NEW HELPER FOR DAILY SYSTEM LOGIC ---
@@ -244,7 +274,7 @@ def classify_personnel(personnel_list):
 
 
 # --- Action Handlers ---
-def handle_login(payload, conn, cursor, client_address):
+def handle_login(payload, conn, cursor, client_address, **kwargs):
     ip_address = client_address[0]
     if ip_address in FAILED_LOGIN_ATTEMPTS:
         attempts, last_attempt_time = FAILED_LOGIN_ATTEMPTS[ip_address]
@@ -274,7 +304,7 @@ def handle_login(payload, conn, cursor, client_address):
         else: FAILED_LOGIN_ATTEMPTS[ip_address] = (1, time.time())
         return {"status": "error", "message": "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง"}, None
 
-def handle_logout(payload, conn, cursor, session):
+def handle_logout(payload, conn, cursor, session, **kwargs):
     token_to_delete = session.get("token")
     if token_to_delete:
         cursor.execute("DELETE FROM sessions WHERE token = ?", (token_to_delete,))
@@ -282,7 +312,7 @@ def handle_logout(payload, conn, cursor, session):
     headers = [('Set-Cookie', 'session_token=; HttpOnly; Path=/; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT')]
     return {"status": "success", "message": "ออกจากระบบสำเร็จ"}, headers
 
-def handle_get_dashboard_summary(payload, conn, cursor):
+def handle_get_dashboard_summary(payload, conn, cursor, **kwargs):
     cursor.execute("SELECT DISTINCT department FROM personnel WHERE department IS NOT NULL AND department != ''")
     all_departments = [row['department'] for row in cursor.fetchall()]
     query = "SELECT sr.department, sr.report_data, sr.timestamp, u.rank, u.first_name, u.last_name FROM status_reports sr JOIN users u ON sr.submitted_by = u.username WHERE sr.timestamp = (SELECT MAX(timestamp) FROM status_reports WHERE department = sr.department)"
@@ -310,7 +340,7 @@ def handle_get_dashboard_summary(payload, conn, cursor):
     }
     return {"status": "success", "summary": summary}
 
-def handle_list_users(payload, conn, cursor):
+def handle_list_users(payload, conn, cursor, **kwargs):
     page = payload.get("page", 1)
     search_term = payload.get("searchTerm", "").strip()
     offset = (page - 1) * ITEMS_PER_PAGE
@@ -330,7 +360,7 @@ def handle_list_users(payload, conn, cursor):
     users = [{k: escape(str(v)) if v is not None else '' for k, v in dict(row).items()} for row in cursor.fetchall()]
     return {"status": "success", "users": users, "total": total_items, "page": page}
 
-def handle_add_user(payload, conn, cursor):
+def handle_add_user(payload, conn, cursor, **kwargs):
     data = payload.get("data", {}); username = data.get("username"); password = data.get("password")
     if not username or not password: return {"status": "error", "message": "กรุณากรอก Username และ Password"}
     if not is_password_complex(password): return {"status": "error", "message": "รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร และมีตัวพิมพ์เล็ก, พิมพ์ใหญ่, และตัวเลข"}
@@ -342,7 +372,7 @@ def handle_add_user(payload, conn, cursor):
     conn.commit()
     return {"status": "success", "message": f"เพิ่มผู้ใช้ '{escape(username)}' สำเร็จ"}
 
-def handle_update_user(payload, conn, cursor):
+def handle_update_user(payload, conn, cursor, **kwargs):
     data = payload.get("data", {}); username = data.get("username"); password = data.get("password")
     if password:
         if not is_password_complex(password): return {"status": "error", "message": "รหัสผ่านต้องมีความยาวอย่างน้อย 8 ตัวอักษร และมีตัวพิมพ์เล็ก, พิมพ์ใหญ่, และตัวเลข"}
@@ -355,14 +385,14 @@ def handle_update_user(payload, conn, cursor):
     conn.commit()
     return {"status": "success", "message": f"อัปเดตข้อมูล '{escape(username)}' สำเร็จ"}
 
-def handle_delete_user(payload, conn, cursor):
+def handle_delete_user(payload, conn, cursor, **kwargs):
     username = payload.get("username")
     if username == 'jeerawut': return {"status": "error", "message": "ไม่สามารถลบบัญชีผู้ดูแลระบบหลักได้"}
     cursor.execute("DELETE FROM users WHERE username = ?", (username,))
     conn.commit()
     return {"status": "success", "message": f"ลบผู้ใช้ '{escape(username)}' สำเร็จ"}
 
-def handle_list_personnel(payload, conn, cursor, session):
+def handle_list_personnel(payload, conn, cursor, session, **kwargs):
     page = payload.get("page", 1)
     search_term = payload.get("searchTerm", "").strip()
     fetch_all = payload.get("fetchAll", False)
@@ -399,6 +429,13 @@ def handle_list_personnel(payload, conn, cursor, session):
     cursor.execute(data_query, params)
     personnel = [{k: escape(str(v)) if v is not None else '' for k, v in dict(row).items()} for row in cursor.fetchall()]
     
+    def get_rank_index(item):
+        try:
+            return RANK_ORDER.index(item['rank'])
+        except (ValueError, KeyError, TypeError):
+            return len(RANK_ORDER)
+    personnel.sort(key=get_rank_index)
+
     submission_status = None
     if not is_admin:
         cursor.execute("SELECT timestamp FROM status_reports WHERE department = ? ORDER BY timestamp DESC LIMIT 1", (department,))
@@ -439,7 +476,7 @@ def handle_list_personnel(payload, conn, cursor, session):
         
     return response_data
 
-def handle_get_personnel_details(payload, conn, cursor):
+def handle_get_personnel_details(payload, conn, cursor, **kwargs):
     person_id = payload.get("id")
     if not person_id: return {"status": "error", "message": "ไม่พบ ID ของกำลังพล"}
     cursor.execute("SELECT * FROM personnel WHERE id = ?", (person_id,))
@@ -447,7 +484,7 @@ def handle_get_personnel_details(payload, conn, cursor):
     if personnel_data: return {"status": "success", "personnel": dict(personnel_data)}
     return {"status": "error", "message": "ไม่พบข้อมูลกำลังพล"}
 
-def handle_add_personnel(payload, conn, cursor):
+def handle_add_personnel(payload, conn, cursor, **kwargs):
     data = payload.get("data", {})
     if not all(data.get(f) for f in ['rank', 'first_name', 'last_name', 'position', 'specialty', 'department']):
         return {"status": "error", "message": "ข้อมูลไม่ครบถ้วน กรุณากรอกข้อมูลให้ครบทุกช่อง"}
@@ -456,7 +493,7 @@ def handle_add_personnel(payload, conn, cursor):
     conn.commit()
     return {"status": "success", "message": "เพิ่มข้อมูลกำลังพลสำเร็จ"}
 
-def handle_update_personnel(payload, conn, cursor):
+def handle_update_personnel(payload, conn, cursor, **kwargs):
     data = payload.get("data", {})
     if not all(data.get(f) for f in ['id', 'rank', 'first_name', 'last_name', 'position', 'specialty', 'department']):
         return {"status": "error", "message": "ข้อมูลไม่ครบถ้วน กรุณากรอกข้อมูลให้ครบทุกช่อง"}
@@ -465,21 +502,67 @@ def handle_update_personnel(payload, conn, cursor):
     conn.commit()
     return {"status": "success", "message": "อัปเดตข้อมูลสำเร็จ"}
 
-def handle_delete_personnel(payload, conn, cursor):
+def handle_delete_personnel(payload, conn, cursor, **kwargs):
     cursor.execute("DELETE FROM personnel WHERE id = ?", (payload.get("id"),))
     conn.commit()
     return {"status": "success", "message": "ลบข้อมูลสำเร็จ"}
 
-def handle_import_personnel(payload, conn, cursor):
-    new_data = payload.get("personnel", [])
-    cursor.execute("DELETE FROM personnel")
-    for p in new_data:
-        cursor.execute("INSERT INTO personnel (id, rank, first_name, last_name, position, specialty, department) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                       (str(uuid.uuid4()), p['rank'], p['first_name'], p['last_name'], p['position'], p['specialty'], p['department']))
-    conn.commit()
-    return {"status": "success", "message": f"นำเข้าข้อมูลกำลังพลจำนวน {len(new_data)} รายการสำเร็จ"}
+# --- Import & Preview Logic (Update & Append) ---
+def handle_preview_import_personnel(payload, conn, cursor, **kwargs):
+    import_data = payload.get("personnel", [])
+    preview_results = []
+    new_count = 0
+    update_count = 0
+    
+    for p in import_data:
+        cursor.execute("SELECT id FROM personnel WHERE first_name = ? AND last_name = ?", (p['first_name'], p['last_name']))
+        existing = cursor.fetchone()
+        
+        item = p.copy()
+        if existing:
+            item['import_status'] = 'update'
+            update_count += 1
+        else:
+            item['import_status'] = 'new'
+            new_count += 1
+        preview_results.append(item)
+        
+    return {
+        "status": "success", 
+        "preview": preview_results,
+        "summary": {"new": new_count, "update": update_count, "total": len(import_data)}
+    }
 
-def handle_submit_status_report(payload, conn, cursor, session):
+def handle_import_personnel(payload, conn, cursor, **kwargs):
+    new_data = payload.get("personnel", [])
+    added_count = 0
+    updated_count = 0
+
+    for p in new_data:
+        cursor.execute("SELECT id FROM personnel WHERE first_name = ? AND last_name = ?", (p['first_name'], p['last_name']))
+        existing = cursor.fetchone()
+
+        if existing:
+            # Update Existing
+            cursor.execute("""
+                UPDATE personnel 
+                SET rank=?, position=?, specialty=?, department=? 
+                WHERE id=?
+            """, (p['rank'], p['position'], p['specialty'], p['department'], existing['id']))
+            updated_count += 1
+        else:
+            # Insert New
+            cursor.execute("""
+                INSERT INTO personnel (id, rank, first_name, last_name, position, specialty, department) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (str(uuid.uuid4()), p['rank'], p['first_name'], p['last_name'], p['position'], p['specialty'], p['department']))
+            added_count += 1
+
+    conn.commit()
+    return {"status": "success", "message": f"นำเข้าสำเร็จ: เพิ่มใหม่ {added_count} รายการ, อัปเดต {updated_count} รายการ"}
+
+
+def handle_submit_status_report(payload, conn, cursor, session, **kwargs):
     report_data = payload.get("report", {})
     submitted_by = session.get("username")
     user_department = report_data.get("department", session.get("department"))
@@ -514,7 +597,7 @@ def handle_submit_status_report(payload, conn, cursor, session):
     conn.commit()
     return {"status": "success", "message": "ส่งยอดกำลังพลสำเร็จ"}
 
-def handle_get_status_reports(payload, conn, cursor):
+def handle_get_status_reports(payload, conn, cursor, **kwargs):
     cursor.execute("SELECT sr.id, sr.date, sr.department, sr.timestamp, sr.report_data, u.rank, u.first_name, u.last_name FROM status_reports sr JOIN users u ON sr.submitted_by = u.username ORDER BY sr.timestamp DESC")
     reports = []
     submitted_departments = set()
@@ -536,7 +619,7 @@ def handle_get_status_reports(payload, conn, cursor):
         "submitted_departments": list(submitted_departments)
     }
 
-def handle_archive_reports(payload, conn, cursor, session):
+def handle_archive_reports(payload, conn, cursor, session, **kwargs):
     reports_to_archive = payload.get("reports", [])
     week_range = payload.get("week_range", "")
     archived_by_user = session.get("username")
@@ -574,7 +657,7 @@ def handle_archive_reports(payload, conn, cursor, session):
 
     return {"status": "success", "message": "เก็บรายงานและรีเซ็ตแดชบอร์ดสำเร็จ"}
 
-def handle_get_archived_reports(payload, conn, cursor):
+def handle_get_archived_reports(payload, conn, cursor, **kwargs):
     cursor.execute("SELECT id, week_range, report_data, archived_by, timestamp FROM archived_reports ORDER BY timestamp DESC")
     
     archives_by_month = defaultdict(lambda: defaultdict(list))
@@ -592,7 +675,7 @@ def handle_get_archived_reports(payload, conn, cursor):
         
     return {"status": "success", "archives": dict(archives_by_month)}
 
-def handle_get_submission_history(payload, conn, cursor, session):
+def handle_get_submission_history(payload, conn, cursor, session, **kwargs):
     user_dept = session.get("department")
     if not user_dept: return {"status": "error", "message": "ไม่พบข้อมูลแผนกของผู้ใช้"}
     
@@ -630,7 +713,7 @@ def handle_get_submission_history(payload, conn, cursor, session):
     return {"status": "success", "history": dict(history_by_month)}
 
 
-def handle_get_report_for_editing(payload, conn, cursor):
+def handle_get_report_for_editing(payload, conn, cursor, **kwargs):
     report_id = payload.get("id")
     if not report_id: return {"status": "error", "message": "ไม่พบ ID ของรายงาน"}
     
@@ -650,7 +733,7 @@ def handle_get_report_for_editing(payload, conn, cursor):
     
     return {"status": "error", "message": "ไม่พบข้อมูลรายงานที่ต้องการแก้ไข"}
 
-def handle_get_active_statuses(payload, conn, cursor, session):
+def handle_get_active_statuses(payload, conn, cursor, session, **kwargs):
     today_str = date.today().isoformat()
     is_admin = session.get("role") == "admin"
     department = session.get("department")
@@ -702,7 +785,7 @@ def handle_get_active_statuses(payload, conn, cursor, session):
     }
 
 # --- START: DAILY SYSTEM ACTION HANDLERS (REVISED LOGIC) ---
-def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
+def handle_get_daily_dashboard_summary(payload, conn, cursor, session, **kwargs):
     target_date = get_daily_target_date(cursor)
     target_date_str = target_date.strftime('%Y-%m-%d')
     
@@ -735,7 +818,7 @@ def handle_get_daily_dashboard_summary(payload, conn, cursor, session):
 
     return {"status": "success", "summary": {"all_departments": all_departments, "submitted_info": submitted_info, "report_date": target_date_str}}
 
-def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
+def handle_get_daily_personnel_for_submission(payload, conn, cursor, session, **kwargs):
     is_admin = session.get("role") == "admin"
     user_department = session.get("department")
     all_departments = []
@@ -762,7 +845,15 @@ def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
             submission_status = {"timestamp": last_submission['timestamp']}
 
     cursor.execute("SELECT * FROM personnel WHERE department = ?", (department_to_view,))
-    personnel_in_dept = [dict(row) for row in cursor.fetchall()]
+    
+    # --- แก้ไขตรงนี้: แปลงข้อมูล None เป็น "" เพื่อป้องกันชื่อหาย ---
+    personnel_in_dept = []
+    for row in cursor.fetchall():
+        item = dict(row)
+        clean_item = {k: (str(v) if v is not None else '') for k, v in item.items()}
+        personnel_in_dept.append(clean_item)
+    # --------------------------------------------------------
+
     classified_personnel = classify_personnel(personnel_in_dept)
     
     cursor.execute("SELECT * FROM persistent_statuses WHERE end_date >= ? AND start_date <= ? AND department = ?",
@@ -795,7 +886,7 @@ def handle_get_daily_personnel_for_submission(payload, conn, cursor, session):
         
     return response_data
 
-def handle_submit_daily_report(payload, conn, cursor, session):
+def handle_submit_daily_report(payload, conn, cursor, session, **kwargs):
     data = payload.get("data", {})
     submitted_by = session.get("username")
     department = data.get("department")
@@ -840,7 +931,7 @@ def handle_submit_daily_report(payload, conn, cursor, session):
     return {"status": "success", "message": f"ส่งยอดกำลังพลสำหรับวันที่ {report_date_str} สำเร็จ"}
 
 
-def handle_get_daily_submission_history(payload, conn, cursor, session):
+def handle_get_daily_submission_history(payload, conn, cursor, session, **kwargs):
     is_admin = session.get("role") == "admin"
     department = session.get("department")
     
@@ -869,7 +960,55 @@ def handle_get_daily_submission_history(payload, conn, cursor, session):
         
     return {"status": "success", "history": dict(history_by_month)}
 
-def handle_get_daily_final_report(payload, conn, cursor, session):
+def handle_get_daily_report_for_editing(payload, conn, cursor, **kwargs):
+    try:
+        report_id = payload.get("id")
+        if not report_id:
+            return {"status": "error", "message": "ไม่พบ ID ของรายงาน"}
+
+        # 1. ค้นหาในรายงานรายวัน (Active)
+        cursor.execute("SELECT * FROM daily_reports WHERE id = ?", (report_id,))
+        row = cursor.fetchone()
+
+        # 2. ถ้าไม่เจอ ให้ค้นหาในรายงานย้อนหลัง (Archive)
+        if not row:
+            cursor.execute("SELECT * FROM archived_daily_reports WHERE id = ?", (report_id,))
+            row = cursor.fetchone()
+
+        if row:
+            report = dict(row)
+            
+            # แปลง JSON string กลับเป็น Object เพื่อให้ JavaScript นำไปใช้ได้
+            try:
+                # แปลง report_data
+                if isinstance(report.get('report_data'), str):
+                    report['report_data'] = json.loads(report['report_data'])
+                elif not isinstance(report.get('report_data'), dict):
+                     report['report_data'] = {}
+
+                # แปลง summary_data (ถ้ามี)
+                if isinstance(report.get('summary_data'), str):
+                    report['summary_data'] = json.loads(report['summary_data'])
+                elif not isinstance(report.get('summary_data'), dict):
+                    report['summary_data'] = {}
+                    
+            except Exception as e:
+                print(f"JSON Parse Error: {e}")
+                report['report_data'] = report.get('report_data', {}) if isinstance(report.get('report_data'), dict) else {}
+                report['summary_data'] = report.get('summary_data', {}) if isinstance(report.get('summary_data'), dict) else {}
+                
+            return {"status": "success", "report": report}
+        else:
+            return {"status": "error", "message": "ไม่พบข้อมูลรายงานที่ต้องการแก้ไข"}
+
+    except Exception as e:
+        print(f"Server Error in handle_get_daily_report_for_editing: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"เกิดข้อผิดพลาด: {str(e)}"}
+
+
+def handle_get_daily_final_report(payload, conn, cursor, session, **kwargs):
     target_date = get_daily_target_date(cursor)
     target_date_str = target_date.strftime('%Y-%m-%d')
 
@@ -898,7 +1037,7 @@ def handle_get_daily_final_report(payload, conn, cursor, session):
         "submitted_departments": submitted_departments
     }
     
-def handle_archive_daily_reports(payload, conn, cursor, session):
+def handle_archive_daily_reports(payload, conn, cursor, session, **kwargs):
     reports_to_archive = payload.get("reports", [])
     if not reports_to_archive:
         return {"status": "error", "message": "ไม่พบรายงานที่จะเก็บ"}
@@ -927,7 +1066,7 @@ def handle_archive_daily_reports(payload, conn, cursor, session):
     conn.commit()
     return {"status": "success", "message": f"เก็บรายงานวันที่ {report_date_to_clear} และรีเซ็ตแดชบอร์ดสำเร็จ"}
 
-def handle_get_archived_daily_reports(payload, conn, cursor, session):
+def handle_get_archived_daily_reports(payload, conn, cursor, session, **kwargs):
     cursor.execute("SELECT * FROM archived_daily_reports ORDER BY year DESC, month DESC, report_date DESC")
     archives = defaultdict(lambda: defaultdict(list))
     for row in cursor.fetchall():
@@ -937,12 +1076,12 @@ def handle_get_archived_daily_reports(payload, conn, cursor, session):
         archives[str(report["year"])][str(report["month"])].append(report)
     return {"status": "success", "archives": dict(archives)}
 
-def handle_list_holidays(payload, conn, cursor, session):
+def handle_list_holidays(payload, conn, cursor, session, **kwargs):
     cursor.execute("SELECT date, description FROM holidays ORDER BY date ASC")
     holidays = [dict(row) for row in cursor.fetchall()]
     return {"status": "success", "holidays": holidays}
 
-def handle_add_holiday(payload, conn, cursor, session):
+def handle_add_holiday(payload, conn, cursor, session, **kwargs):
     holiday_date = payload.get("date")
     description = payload.get("description")
     if not holiday_date or not description:
@@ -954,7 +1093,7 @@ def handle_add_holiday(payload, conn, cursor, session):
     except sqlite3.IntegrityError:
         return {"status": "error", "message": "วันหยุดนี้มีอยู่ในระบบแล้ว"}
 
-def handle_delete_holiday(payload, conn, cursor, session):
+def handle_delete_holiday(payload, conn, cursor, session, **kwargs):
     holiday_date = payload.get("date")
     if not holiday_date:
         return {"status": "error", "message": "ไม่พบข้อมูลวันที่ที่จะลบ"}
@@ -980,7 +1119,11 @@ class APIHandler(BaseHTTPRequestHandler):
         "add_personnel": {"handler": handle_add_personnel, "auth_required": True, "admin_only": True},
         "update_personnel": {"handler": handle_update_personnel, "auth_required": True, "admin_only": True},
         "delete_personnel": {"handler": handle_delete_personnel, "auth_required": True, "admin_only": True},
+        
+        # Updated Import Logic (Update & Append) and Preview
         "import_personnel": {"handler": handle_import_personnel, "auth_required": True, "admin_only": True},
+        "preview_import_personnel": {"handler": handle_preview_import_personnel, "auth_required": True, "admin_only": True},
+        
         "submit_status_report": {"handler": handle_submit_status_report, "auth_required": True},
         "get_status_reports": {"handler": handle_get_status_reports, "auth_required": True, "admin_only": True},
         "archive_reports": {"handler": handle_archive_reports, "auth_required": True, "admin_only": True},
@@ -994,6 +1137,10 @@ class APIHandler(BaseHTTPRequestHandler):
         "get_daily_personnel_for_submission": {"handler": handle_get_daily_personnel_for_submission, "auth_required": True},
         "submit_daily_report": {"handler": handle_submit_daily_report, "auth_required": True},
         "get_daily_submission_history": {"handler": handle_get_daily_submission_history, "auth_required": True},
+        
+        # Updated Daily Report Editing Handler
+        "get_daily_report_for_editing": {"handler": handle_get_daily_report_for_editing, "auth_required": True},
+        
         "get_daily_final_report": {"handler": handle_get_daily_final_report, "auth_required": True, "admin_only": True},
         "archive_daily_reports": {"handler": handle_archive_daily_reports, "auth_required": True, "admin_only": True},
         "get_archived_daily_reports": {"handler": handle_get_archived_daily_reports, "auth_required": True, "admin_only": True},
@@ -1090,7 +1237,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     "get_daily_dashboard_summary", "get_daily_submission_history",
                     "get_daily_final_report", "archive_daily_reports",
                     "get_archived_daily_reports", "archive_reports",
-                    "list_holidays", "add_holiday", "delete_holiday"
+                    "list_holidays", "add_holiday", "delete_holiday",
+                    "get_daily_report_for_editing" # เพิ่มการส่ง session ให้ฟังก์ชันนี้ (ถ้าจำเป็นในอนาคต แต่ตอนนี้ใช้ kwargs ดักไว้แล้ว)
                     ]:
                     handler_kwargs["session"] = session
 

@@ -5,6 +5,11 @@ import { sendRequest } from './api.js';
 import { showMessage, openPersonnelModal, openUserModal, showConfirmModal, addStatusRow, renderArchivedReports, renderFilteredHistoryReports } from './ui.js';
 import { exportSingleReportToExcel, formatThaiDateRangeArabic, escapeHTML } from './utils.js';
 
+// --- Global Variables ---
+let pendingImportData = null; // ตัวแปรเก็บข้อมูลนำเข้าที่รอการยืนยัน
+
+// --- Personnel Handlers ---
+
 export async function handlePersonnelFormSubmit(e) {
     e.preventDefault();
     const personId = window.personnelForm.querySelector('#person-id').value;
@@ -58,6 +63,8 @@ export async function handlePersonnelListClick(e) {
         }
     }
 }
+
+// --- User (Admin) Handlers ---
 
 export async function handleUserFormSubmit(e) {
     e.preventDefault();
@@ -116,6 +123,8 @@ export async function handleUserListClick(e) {
     }
 }
 
+// --- Import / Export Handlers ---
+
 export function handleExcelImport(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -127,24 +136,43 @@ export function handleExcelImport(event) {
             const firstSheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[firstSheetName];
             const json = XLSX.utils.sheet_to_json(worksheet);
+            
+            // แปลงข้อมูลให้ตรงกับฟอร์แมต Database
             const formattedData = json.map(row => ({
-                rank: row['ยศ-คำนำหน้า'], first_name: row['ชื่อ'], last_name: row['นามสกุล'],
-                position: row['ตำแหน่ง'], specialty: row['เหล่า'], department: row['แผนก']
-            }));
-            const response = await sendRequest('import_personnel', { personnel: formattedData });
-            if (response.status === 'success') {
-                window.loadDataForPane('pane-personnel');
+                rank: row['ยศ-คำนำหน้า'] || '', 
+                first_name: row['ชื่อ'] || '', 
+                last_name: row['นามสกุล'] || '',
+                position: row['ตำแหน่ง'] || '', 
+                specialty: row['เหล่า'] || '', 
+                department: row['แผนก'] || ''
+            })).filter(item => item.first_name && item.last_name); // กรองแถวที่ไม่มีชื่อออก
+
+            if (formattedData.length === 0) {
+                showMessage("ไม่พบข้อมูลที่ถูกต้องในไฟล์ Excel", false);
+                return;
             }
-            showMessage(response.message, response.status === 'success');
+
+            // ส่งไปตรวจสอบ (Preview) ก่อน
+            const response = await sendRequest('preview_import_personnel', { personnel: formattedData });
+            
+            if (response.status === 'success') {
+                pendingImportData = formattedData; // เก็บข้อมูลดิบรอไว้
+                showImportPreviewModal(response.preview, response.summary); // แสดง Modal
+            } else {
+                showMessage(response.message, false);
+            }
+
         } catch (error) {
             console.error("Error processing Excel file:", error);
-            showMessage("เกิดข้อผิดพลาดในการประมวลผลไฟล์ Excel", false);
+            showMessage("เกิดข้อผิดพลาดในการประมวลผลไฟล์ Excel: " + error.message, false);
         } finally {
-            window.excelImportInput.value = '';
+            if (window.excelImportInput) window.excelImportInput.value = '';
         }
     };
     reader.readAsArrayBuffer(file);
 }
+
+// --- Submission & Reporting Handlers ---
 
 export function handleReviewStatus() {
     const rows = window.statusSubmissionListArea.querySelectorAll('tr');
@@ -378,7 +406,7 @@ export async function handleWeeklyReportEditClick(e) {
     }
 }
 
-// *** NEW: Holiday Handlers ***
+// *** Holiday Handlers ***
 export async function renderHolidays(res) {
     const { holidays } = res;
     if (!window.holidayListContainer) return;
@@ -417,7 +445,7 @@ export async function renderHolidays(res) {
 }
 
 export async function handleAddHoliday(e) {
-    e.preventDefault(); // This is the crucial line to prevent page reload
+    e.preventDefault(); 
     const holidayDate = document.getElementById('holiday-date').value;
     const description = document.getElementById('holiday-description').value;
     
@@ -458,3 +486,157 @@ export async function handleDeleteHoliday(e) {
     });
 }
 
+// --- Helper Functions (Local) ---
+
+// ฟังก์ชันสร้างและแสดง Modal ตรวจสอบข้อมูลนำเข้า (ฉบับแก้ไข: ลบของเก่าทิ้งเพื่อป้องกัน Error)
+function showImportPreviewModal(previewData, summary) {
+    // 1. ลบ Modal เก่าทิ้งก่อนเสมอ (ป้องกันปัญหาโครงสร้าง HTML ไม่ตรงกัน)
+    const existingModal = document.getElementById('import-preview-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+
+    // 2. แยกข้อมูลเป็น 2 กลุ่ม
+    const newItems = previewData.filter(item => item.import_status === 'new');
+    const updateItems = previewData.filter(item => item.import_status === 'update');
+
+    // 3. ฟังก์ชันย่อยสร้างแถวตาราง
+    const createTableRows = (items, colorClass) => {
+        if (items.length === 0) return '<tr><td colspan="4" class="text-center py-4 text-gray-400">ไม่มีรายการ</td></tr>';
+        return items.map((item, index) => `
+            <tr class="hover:bg-gray-50 border-b last:border-b-0">
+                <td class="py-2 px-4 text-sm text-gray-500">${index + 1}</td>
+                <td class="py-2 px-4 text-sm font-medium text-gray-900">${escapeHTML(item.rank || '')} ${escapeHTML(item.first_name || '')} ${escapeHTML(item.last_name || '')}</td>
+                <td class="py-2 px-4 text-sm text-gray-600">${escapeHTML(item.position || '')}</td>
+                <td class="py-2 px-4 text-sm text-gray-600">${escapeHTML(item.department || '')}</td>
+            </tr>
+        `).join('');
+    };
+
+    // 4. สร้าง HTML ของ Modal ใหม่
+    const modalHTML = `
+        <div class="modal-content shadow-xl rounded-lg bg-white overflow-hidden" style="width: 900px; max-width: 95vw; max-height: 90vh; display: flex; flex-direction: column;">
+            
+            <div class="modal-header bg-gray-800 text-white px-6 py-4 flex justify-between items-center">
+                <h2 class="text-xl font-bold flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    ตรวจสอบข้อมูลนำเข้า
+                </h2>
+                <span class="close-btn text-gray-400 hover:text-white cursor-pointer text-2xl leading-none">&times;</span>
+            </div>
+
+            <div class="modal-body bg-gray-50 p-6 overflow-y-auto flex-grow">
+                
+                <div class="mb-6 bg-white rounded-lg shadow-sm border border-green-200 overflow-hidden">
+                    <div class="bg-green-50 px-4 py-2 border-b border-green-200 flex justify-between items-center">
+                        <h3 class="font-bold text-green-800 flex items-center gap-2">
+                            <span class="bg-green-500 w-2 h-2 rounded-full inline-block"></span>
+                            รายชื่อที่จะเพิ่มใหม่ (${newItems.length})
+                        </h3>
+                    </div>
+                    <table class="min-w-full text-left">
+                        <thead class="bg-gray-50 text-gray-500 font-medium border-b">
+                            <tr>
+                                <th class="py-2 px-4 w-12 text-xs uppercase">#</th>
+                                <th class="py-2 px-4 text-xs uppercase">ชื่อ-สกุล</th>
+                                <th class="py-2 px-4 text-xs uppercase">ตำแหน่ง</th>
+                                <th class="py-2 px-4 text-xs uppercase">สังกัด</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            ${createTableRows(newItems, 'green')}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="bg-white rounded-lg shadow-sm border border-orange-200 overflow-hidden">
+                    <div class="bg-orange-50 px-4 py-2 border-b border-orange-200 flex justify-between items-center">
+                        <h3 class="font-bold text-orange-800 flex items-center gap-2">
+                            <span class="bg-orange-500 w-2 h-2 rounded-full inline-block"></span>
+                            รายชื่อที่จะอัปเดตข้อมูล (${updateItems.length})
+                        </h3>
+                        <span class="text-xs text-orange-600">* รายชื่อซ้ำกับในระบบ ข้อมูลยศ/ตำแหน่ง/สังกัด จะถูกอัปเดตตามไฟล์ Excel</span>
+                    </div>
+                    <table class="min-w-full text-left">
+                        <thead class="bg-gray-50 text-gray-500 font-medium border-b">
+                            <tr>
+                                <th class="py-2 px-4 w-12 text-xs uppercase">#</th>
+                                <th class="py-2 px-4 text-xs uppercase">ชื่อ-สกุล</th>
+                                <th class="py-2 px-4 text-xs uppercase">ตำแหน่งใหม่</th>
+                                <th class="py-2 px-4 text-xs uppercase">สังกัดใหม่</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            ${createTableRows(updateItems, 'orange')}
+                        </tbody>
+                    </table>
+                </div>
+
+            </div>
+
+            <div class="modal-footer bg-white p-4 border-t flex flex-col gap-4">
+                
+                <div class="flex justify-between items-center bg-blue-50 px-4 py-3 rounded border border-blue-100">
+                    <div class="text-blue-900 font-medium">
+                        สรุปรายการทั้งหมด: <span class="text-xl font-bold ml-1">${summary.total}</span> รายการ
+                    </div>
+                    <div class="flex gap-4 text-sm">
+                        <span class="flex items-center gap-1 text-green-700"><span class="w-3 h-3 bg-green-500 rounded-full"></span> เพิ่มใหม่ ${summary.new}</span>
+                        <span class="flex items-center gap-1 text-orange-700"><span class="w-3 h-3 bg-orange-500 rounded-full"></span> อัปเดต ${summary.update}</span>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3">
+                    <button id="btn-cancel-import" class="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold rounded transition-colors">ยกเลิก</button>
+                    <button id="btn-confirm-import" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded shadow transition-colors flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                        </svg>
+                        ยืนยันการนำเข้าข้อมูล
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // 5. สร้าง Element ใหม่และนำไปแสดงผล
+    const modal = document.createElement('div');
+    modal.id = 'import-preview-modal';
+    modal.className = 'modal';
+    modal.innerHTML = modalHTML;
+    document.body.appendChild(modal);
+
+    // 6. ผูก Event Handlers
+    const closeAction = () => { modal.classList.remove('active'); pendingImportData = null; };
+    modal.querySelector('.close-btn').onclick = closeAction;
+    modal.querySelector('#btn-cancel-import').onclick = closeAction;
+
+    modal.querySelector('#btn-confirm-import').onclick = async () => {
+        if (!pendingImportData) return;
+        const btn = modal.querySelector('#btn-confirm-import');
+        const originalContent = btn.innerHTML;
+        btn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white inline-block mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> กำลังบันทึก...`;
+        btn.disabled = true;
+
+        try {
+            const res = await sendRequest('import_personnel', { personnel: pendingImportData });
+            if (res.status === 'success') {
+                window.loadDataForPane('pane-personnel');
+                showMessage(res.message, true);
+                closeAction();
+            } else {
+                showMessage(res.message, false);
+            }
+        } catch (err) {
+            showMessage(err.message, false);
+        } finally {
+            btn.innerHTML = originalContent;
+            btn.disabled = false;
+        }
+    };
+
+    // 7. แสดง Modal
+    setTimeout(() => modal.classList.add('active'), 10);
+}

@@ -225,24 +225,36 @@ async function switchTab(tabId) {
 
 // --- Event Handlers ---
 async function handleDailyHistoryEditClick(e) {
-    if (!e.target || !e.target.classList.contains('edit-daily-history-btn')) return;
+    // ใช้วิธี closest เพื่อให้แน่ใจว่าจับปุ่มได้แม้กดโดน icon ข้างใน
+    const btn = e.target.closest('.edit-daily-history-btn');
+    if (!btn) return;
     
-    const reportId = e.target.dataset.reportId;
+    const reportId = btn.dataset.reportId;
     if (!reportId) return;
+
+    // เปลี่ยนสถานะปุ่มให้ผู้ใช้รู้ว่าระบบกำลังทำงาน
+    const originalText = btn.textContent;
+    btn.textContent = 'กำลังโหลด...';
+    btn.disabled = true;
 
     try {
         const res = await sendRequest('get_daily_report_for_editing', { id: reportId });
         if (res.status === 'success' && res.report) {
             window.editingDailyReportData = res.report;
             if (currentUser.role === 'admin') {
-                // We don't need to set the dropdown here because loadDataForPane will handle it
+                // Admin logic handled in loadDataForPane
             }
-            switchTab('tab-daily-submit');
+            // สลับไปหน้า Submit เพื่อแสดงข้อมูล
+            await switchTab('tab-daily-submit');
         } else {
             ui.showMessage(res.message || 'ไม่สามารถดึงข้อมูลรายงานมาแก้ไขได้', false);
         }
     } catch (error) {
         ui.showMessage(error.message, false);
+    } finally {
+        // คืนสถานะปุ่มเดิม (กรณี Error หรือโหลดเสร็จแล้ว)
+        btn.textContent = originalText;
+        btn.disabled = false;
     }
 }
 
@@ -470,8 +482,9 @@ function renderSubmissionForm(res) {
     const submissionContent = document.getElementById('daily-submission-content');
     const adminSelectorContainer = document.getElementById('admin-dept-selector-container-daily');
     
-    // Logic for showing/hiding form based on submission status
-    if (submission_status) {
+    // --- ส่วนแสดงข้อความแจ้งเตือนว่าส่งยอดไปแล้ว ---
+    if (submission_status && !window.editingDailyReportData) { 
+        // เพิ่มเงื่อนไข !window.editingDailyReportData เพื่อไม่ให้ซ่อนฟอร์มตอนกำลังกดแก้ไข
         const submittedTime = new Date(submission_status.timestamp).toLocaleString('th-TH', { dateStyle: 'full', timeStyle: 'short' });
         let message = `คุณได้ส่งยอดสำหรับวันที่ ${formatThaiDate(report_date)} ไปแล้วเมื่อ ${submittedTime} น.`;
         if (currentUser.role === 'admin') {
@@ -485,20 +498,19 @@ function renderSubmissionForm(res) {
         if (document.getElementById('go-to-history-btn')) {
             document.getElementById('go-to-history-btn').addEventListener('click', () => switchTab('tab-daily-history'));
         }
-        // For admins, we still show the department selector
         if (currentUser.role !== 'admin') {
             adminSelectorContainer.classList.add('hidden');
         }
     } else {
+        // กรณีปกติ หรือ กำลังแก้ไขข้อมูล
         submissionInfoArea.classList.add('hidden');
         submissionContent.classList.remove('hidden');
         adminSelectorContainer.classList.remove('hidden');
     }
 
-    // Render Admin Department Selector
+    // --- ส่วนเลือกแผนก (Admin) ---
     adminSelectorContainer.innerHTML = '';
     if (currentUser.role === 'admin' && all_departments) {
-        // If editing, make sure the dropdown shows the correct department
         const departmentToSelect = window.editingDailyReportData ? window.editingDailyReportData.department : currentDepartment;
         let selectorHTML = `<label for="admin-dept-selector-daily" class="block text-sm font-medium text-gray-700 mb-1">เลือกแผนก</label>
             <select id="admin-dept-selector-daily" class="w-full md:w-1/3 border rounded px-2 py-2 bg-white shadow-sm">
@@ -510,7 +522,7 @@ function renderSubmissionForm(res) {
         });
     }
 
-    // Render bulk clear button
+    // --- ส่วนปุ่มล้างค่า ---
     const bulkButtonContainer = document.getElementById('bulk-status-buttons-daily');
     bulkButtonContainer.innerHTML = `<button id="clear-daily-form-btn" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-1 px-3 text-sm rounded-lg">ล้างค่า ทั้งหมด</button>`;
     document.getElementById('clear-daily-form-btn').addEventListener('click', () => {
@@ -531,6 +543,7 @@ function renderSubmissionForm(res) {
     const dateEl = document.getElementById('daily-submit-date');
     if (dateEl) dateEl.textContent = `สำหรับวันที่: ${formatThaiDate(report_date)}`;
     
+    // --- สร้างตารางรายชื่อ ---
     const categories = {
         officer: { data: personnel.officer, container: 'submission-list-officer' },
         nco: { data: personnel.nco, container: 'submission-list-nco' },
@@ -548,7 +561,6 @@ function renderSubmissionForm(res) {
     for (const key in categories) {
         const { data, container } = categories[key];
         const containerEl = document.getElementById(container);
-       
         if (!containerEl) continue;
 
         if (!data || data.length === 0) {
@@ -593,18 +605,25 @@ function renderSubmissionForm(res) {
         tableHTML += '</tbody></table>';
         containerEl.innerHTML = tableHTML;
         
+        // Initialize Flatpickr and Events
         data.forEach(p => {
             const row = containerEl.querySelector(`tr[data-id="${p.id}"]`);
             if (row) {
                 const statusSelect = row.querySelector('.status-select');
-                statusSelect.value = p.status || 'ไม่มี';
-                row.querySelector('.details-input').value = p.details || '';
+                // Set default status from persistent storage (if not editing)
+                if (!window.editingDailyReportData) {
+                    statusSelect.value = p.status || 'ไม่มี';
+                    row.querySelector('.details-input').value = p.details || '';
+                }
                 
                 const startDatePicker = flatpickr(row.querySelector('.start-date-input'), flatpickrConfig);
                 const endDatePicker = flatpickr(row.querySelector('.end-date-input'), flatpickrConfig);
                 
-                if (p.start_date) startDatePicker.setDate(p.start_date);
-                if (p.end_date) endDatePicker.setDate(p.end_date);
+                // Set default dates from persistent storage (if not editing)
+                if (!window.editingDailyReportData) {
+                    if (p.start_date) startDatePicker.setDate(p.start_date);
+                    if (p.end_date) endDatePicker.setDate(p.end_date);
+                }
 
                 statusSelect.addEventListener('change', () => updateCategorySummary(key));
             }
@@ -612,36 +631,54 @@ function renderSubmissionForm(res) {
         updateCategorySummary(key);
     }
     
-    // Pre-fill form if editing
-    if (window.editingDailyReportData) {
+    // --- ส่วนสำคัญ: เติมข้อมูลเก่ากรณีแก้ไข (Pre-fill Form) ---
+    if (window.editingDailyReportData && window.editingDailyReportData.report_data) {
+        console.log("Applying Edit Data:", window.editingDailyReportData); // Debug log
+        
         const categories = ['officer', 'nco', 'civilian'];
         categories.forEach(key => {
             const items = window.editingDailyReportData.report_data[key];
-            if (items && items.length > 0) {
+            if (items && Array.isArray(items) && items.length > 0) {
+                
+                // สร้าง Map เพื่อให้ค้นหาข้อมูลตาม ID ได้เร็ว
                 const itemMap = items.reduce((map, item) => {
                     map[item.personnel_id] = item;
                     return map;
                 }, {});
 
                 const containerEl = document.getElementById(`submission-list-${key}`);
-                containerEl.querySelectorAll('tbody > tr').forEach(row => {
-                    const personId = row.dataset.id;
-                    if (itemMap[personId]) {
-                        const savedItem = itemMap[personId];
-                        row.querySelector('.status-select').value = savedItem.status;
-                        row.querySelector('.details-input').value = savedItem.details;
-                        const startDatePicker = row.querySelector('.start-date-input')._flatpickr;
-                        if (startDatePicker) startDatePicker.setDate(savedItem.start_date);
-                        const endDatePicker = row.querySelector('.end-date-input')._flatpickr;
-                        if (endDatePicker) endDatePicker.setDate(savedItem.end_date);
-                    }
-                });
+                if(containerEl) {
+                    containerEl.querySelectorAll('tbody > tr').forEach(row => {
+                        const personId = row.dataset.id;
+                        // ตรวจสอบว่า ID ในตาราง ตรงกับ ID ในรายงานที่บันทึกไว้ไหม
+                        if (itemMap[personId]) {
+                            const savedItem = itemMap[personId];
+                            
+                            // คืนค่าสถานะ
+                            const statusSelect = row.querySelector('.status-select');
+                            statusSelect.value = savedItem.status;
+                            
+                            // คืนค่ารายละเอียด
+                            row.querySelector('.details-input').value = savedItem.details || '';
+                            
+                            // คืนค่าวันที่
+                            const startDatePicker = row.querySelector('.start-date-input')._flatpickr;
+                            if (startDatePicker && savedItem.start_date) startDatePicker.setDate(savedItem.start_date);
+                            
+                            const endDatePicker = row.querySelector('.end-date-input')._flatpickr;
+                            if (endDatePicker && savedItem.end_date) endDatePicker.setDate(savedItem.end_date);
+                            
+                            // อัปเดตสีแถว (Highlight)
+                            updateCategorySummary(key);
+                        }
+                    });
+                }
             }
         });
-        window.editingDailyReportData = null; // Clear after use
+        
+        // ล้างค่าตัวแปรเมื่อใช้เสร็จแล้ว
+        window.editingDailyReportData = null; 
     }
-    
-    reviewReportSectionDaily.classList.add('hidden');
 }
 
 // --- Daily Report and Archive Rendering ---
