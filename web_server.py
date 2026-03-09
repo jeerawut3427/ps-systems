@@ -1253,7 +1253,7 @@ class APIHandler(BaseHTTPRequestHandler):
             print(f"API Error on action '{action_name}': {e}")
             self._send_json_response({"status": "error", "message": "Server error"}, 500)
 
-def run(server_class=HTTPServer, handler_class=APIHandler, port=8000):
+def run(server_class=HTTPServer, handler_class=APIHandler, port=9999):
     init_db()
     httpd = server_class(('', port), handler_class)
     print(f"เซิร์ฟเวอร์ระบบจัดการกำลังพลกำลังทำงานที่ http://localhost:{port}")
